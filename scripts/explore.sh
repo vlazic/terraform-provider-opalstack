@@ -25,7 +25,11 @@ TOKEN="${OPALSTACK_TOKEN:-}"
 if [[ -z "$TOKEN" ]]; then
   TOKEN="$(pass show "$PASS_PATH" | head -n1)" || { echo "FATAL: cannot read token from pass" >&2; exit 1; }
 fi
-[[ ${#TOKEN} -eq 40 ]] || { echo "FATAL: token is not 40 characters" >&2; exit 1; }
+# A pass entry can end in a carriage return or a space, which is not part of the token.
+TOKEN="${TOKEN//[[:space:]]/}"
+# The length is not assumed: tokens issued by the newer dashboard are not 40 characters.
+[[ "$TOKEN" =~ ^[A-Za-z0-9_-]{20,}$ ]] || { echo "FATAL: token has an unexpected shape (length ${#TOKEN})" >&2; exit 1; }
+echo "explore: token length ${#TOKEN}" >&2
 
 BODY="$(mktemp)"; HDRS="$(mktemp)"
 trap 'rm -f "$BODY" "$HDRS"' EXIT

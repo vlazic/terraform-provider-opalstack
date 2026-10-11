@@ -7,11 +7,12 @@ Sources, by short name:
 
 | Name | What it is |
 |---|---|
-| `spec` | [`spec/openapi.yaml`](spec/openapi.yaml), OpenAPI 3.0.3, saved from the dashboard on 2026-05-22 |
+| `spec` | [`spec/openapi.yaml`](spec/openapi.yaml), OpenAPI 3.0.3, fetched from `GET /schema/` on 2026-10-11 |
+| `spec-05` | a copy saved from the dashboard on 2026-05-22, kept outside this repo |
 | `spec-2023` | the copy inside `vlazic/opalstack-go` (`api/openapi.yaml`), August 2023 |
 | `wrapper` | `opalstack/opalstack-python` at `aa3fc78` (2024-02-02), `src/opalstack/api.py` |
 | `runbook` | the owner's operational runbook for the real account, kept outside this repo. Facts cited from it were observed in production use during 2026 |
-| `explore` | output of [`scripts/explore.sh`](scripts/explore.sh), a GET-only survey of the live API |
+| `explore` | output of [`scripts/explore.sh`](scripts/explore.sh), a GET-only survey of the live API, run 2026-10-11. `explore:<file>` names a file in the git-ignored `explore-out/` |
 
 ## Basics
 
@@ -71,12 +72,15 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
 
 | | Fields |
 |---|---|
-| Create `DomainCreate` | `name`* string, max 255 |
-| Update | **no such endpoint** |
-| Response `DomainResponse` | `id`, `state`, `ready`, `name`, `dkim_record`, `dkim_privkey`, `dkim_pubkey`, `is_valid_hostname` |
+| Create `DomainCreate` | `name`* string, max 255, `delegated_dns_zone` bool, default false |
+| Update `DomainUpdate` | `id`*, `delegated_dns_zone` |
+| Response `DomainResponse` | `id`, `state`, `ready`, `name`, `delegated_dns_zone`, `dkim_record`, `dkim_privkey`, `dkim_pubkey`, `is_valid_hostname` |
 | Delete `DomainDelete` | `[{"id"}]` |
 
-- Every argument is RequiresReplace (spec: there is no `/domain/update/` path).
+- `name` is RequiresReplace. `delegated_dns_zone` is updatable in place: `/domain/update/` and the
+  field both appeared between May and October 2026 (see the spec comparison below). Every earlier
+  source, including this project's research notes, says a domain cannot be updated.
+- The three `dkim_*` fields are null on some domains (explore:`domain.list.txt`).
 - **`dkim_privkey` is a private key in every domain response.** The provider must not expose it as
   an attribute and the client's debug log must redact it. The redaction pattern `key` covers it.
 
@@ -93,7 +97,8 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
 - `name`, `osuser` and `installer_url` are not updatable: RequiresReplace. An app cannot be moved
   to another shell user (spec, and confirmed the hard way in the runbook).
 - `type` **is** updatable in place, which the research notes had as replace.
-- `port` is server-assigned (relevant to `CUS`).
+- `port` is server-assigned and null for types that have none (explore:`app.list.txt`).
+- The live response also carries `osuser_name`, which the spec omits. `installer_url` can be null.
 - `json` on the response holds per-type settings: `php_version`, `fpm_*`, `app_exec`, `url_fopen`,
   `sym_link_path`, `auto_site_url`, `add_https_security_headers`, `external_port_access`,
   `subroot`, and `db_*`/`app_*` keys used by installers. The spec gives the write-side `json` no
@@ -114,8 +119,11 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
 
 - Everything is updatable in place, including `name` (spec).
 - `routes` is replaced as a whole on update (runbook). A response route has its own `id`.
-- `primary_domain` and `json` are accepted on write but are **not in the response schema**, so the
-  provider cannot read them back. Leave both out of the first version.
+- The live response carries `primary_domain` (null or uuid) and `json` (object), although the
+  spec's `SiteResponse` lists `json` only and omits `primary_domain` (explore:`site.list.txt`). So
+  `primary_domain` can be read back and is a candidate attribute; site `json` stays out of the
+  first version because nothing documents its keys.
+- `ip6` is null on every site of the surveyed account and `ip4` is always set.
 - `disabled: true` takes the site offline completely (runbook).
 - Let's Encrypt results appear as entries in `/notice/list/`, not on the site (runbook).
 - **UNVERIFIED:** whether the order of `routes` and of `domains` is preserved by the server.
@@ -136,26 +144,82 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
 ### server and ip (read only)
 
 - `GET /server/list/` returns an **object**, not an array: `{web_servers, imap_servers,
-  smtp_servers}`, each an array. A web server is `{id, hostname, type}`.
+  smtp_servers}`, each an array. A web server is `{id, hostname, type}` in the spec; live, every entry also has `os`
+  (string) and `vendor` (object), and `type` is `web`, `imap` or `smtp` (explore:`server.list.txt`).
 - `GET /server/read/{uuid}` returns one web-server-shaped object. The spec documents no 404 for it.
 - `IPAddressResponse` is `{id, ip, server, type, primary}` with `type` `"4"` or `"6"` as strings.
 
-## Changes between the two spec copies
+## Changes between spec copies
 
-Derived with `diff` over the sorted path and schema names of `spec-2023` and `spec`.
+Derived with `diff` over the sorted path and schema names of each pair.
 
-- Added by 2026: `/tokenacl/{create,delete,list,read/{token},update}/`, `/register/`,
-  `/payment/coupon_verify/`, and the `TokenACL*` schemas.
-- Gone by 2026: `/usage/web/latest/` and the `WebUsage*` schemas.
-- All seven kinds above have identical paths in both. Three years of v1 with no change to them is the
-  stability evidence.
+| From | To | Added | Removed |
+|---|---|---|---|
+| `spec-2023` | `spec-05` | `/tokenacl/{create,delete,list,read/{token},update}/`, `/register/`, `/payment/coupon_verify/`, `TokenACL*` schemas | `/usage/web/latest/`, `WebUsage*` schemas |
+| `spec-05` | `spec` | `/domain/update/`, `DomainUpdate`, `delegated_dns_zone` on domain | `/token/list/`, `/token/read/{key}` |
 
-`/tokenacl/` matters later: token ACLs are scriptable, so the scoped test token of the next plan
-could be described precisely. The provider itself still never calls it.
+The paths of the seven kinds this provider uses did not change in three years, apart from the
+domain update added in 2026. **The API does change within v1 without a version bump**
+(`info.version` is still `1.0.0`), so `spec/openapi.yaml` should be refetched before each phase:
+`scripts/explore.sh` saves the live copy as `explore-out/schema.oai-yaml`.
 
 ## From the live survey
 
-Pending: filled in from `explore-out/` once `scripts/explore.sh` has run.
+`scripts/explore.sh`, 2026-10-11, GET only. Every file it wrote holds field names, types, enum
+values and counts; no object of the account is identifiable from them.
+
+### The schema endpoint
+
+`GET /schema/` answers 200 with a valid token. With `Accept: application/vnd.oai.openapi` it
+returns YAML (125 KB); with `application/json`, `?format=json` or
+`application/vnd.oai.openapi+json` it returns JSON (266 KB) (explore:`schema-status.txt`).
+
+### Status codes and error bodies
+
+| Request | Status | Body |
+|---|---|---|
+| `read` of a well-formed UUID that does not exist, for osuser, ip, domain, app, site, dnsrecord | 404 | JSON `{"id":["Not found."]}` |
+| the same for server | 404 | JSON `{"errors":["Not found."]}` |
+| `read` of an id that is not a UUID, all seven kinds | 404 | **HTML**, `content-type: text/html` |
+| any request with an invalid token | 401 | JSON `{"detail":"Invalid token."}` |
+
+Consequences for the client:
+
+- Not-found is **404 on `read`**, whatever the body. `ErrNotFound` is decided on the status alone.
+- Error bodies come in at least three JSON shapes (`{"<field>": [..]}`, `{"errors": [..]}`,
+  `{"detail": ".."}`) and one non-JSON shape. The client keeps the raw body for the diagnostic
+  and extracts messages on a best-effort basis; it never assumes JSON.
+- 401 is its own error (`ErrUnauthorized`): a bad token must stop the run, not be retried and not
+  be read as "object gone".
+- **UNVERIFIED:** what a 403 looks like. An object hidden by a token ACL may answer 403 or 404;
+  only a scoped token can tell, and the answer decides whether the provider can distinguish
+  "deleted" from "not allowed" at all.
+
+### Lists, headers, embed
+
+- Every list of 17 to 126 objects came back as one bare array. No `Link`, `X-Total-Count` or other
+  pagination header, and no rate-limit header of any kind (explore:`list-headers.txt`). Rate limits,
+  if any, are invisible until hit.
+- `allow: OPTIONS, GET` on a list path.
+- `?embed=` works as documented: `server` on osuser and ip, `osuser,server` on app, `domain` on
+  dnsrecord, and `domains,ip4` on site (where `domains` becomes an array of objects) each turn the
+  UUID into an object. An unknown embed key is ignored silently, with status 200
+  (explore:`embed.txt`).
+
+### Names
+
+In an account with 17 shell users, 37 apps, 35 sites and 126 domains: no two shell users, sites or
+domains share a name, and no app name is used twice, either within one shell user or across two
+(explore:`app.uniqueness.txt`, and `duplicate_names` in each `*.list.txt`). That is consistent with
+names being unique account-wide per kind, but it is an observation, not a rule: **UNVERIFIED** until
+a duplicate create is attempted. Import by name must therefore fail on more than one match rather
+than pick one.
+
+### Values seen
+
+- `state` was `READY` and `ready` true on every object of every kind. No pending state was observed.
+- App types in use: `APA`, `CUS`, `NPF`, `STA`. DNS record types in use: `A`, `AAAA`, `CNAME`, `TXT`.
+- IP: one address, type `"4"`, primary.
 
 ## UNVERIFIED, needs a write test
 
@@ -172,3 +236,4 @@ sandbox shell user and a scoped token exist.
 7. Which DNS records a site creates on its own, and whether they appear in `/dnsrecord/list/`.
 8. The 400 body for a validation error (duplicate name, bad enum, bad uuid).
 9. Whether a name can be reused immediately after its delete is queued, or only after teardown.
+10. What an ACL-hidden object answers on `read`: 403 or 404.
