@@ -1,0 +1,10 @@
+.env
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+crash.log
+_ref/
+dist/
+explore-out/
+terraform-provider-opalstack
