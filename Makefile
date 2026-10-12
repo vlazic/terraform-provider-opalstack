@@ -27,6 +27,13 @@ test: ## Unit tests. Offline: no request leaves the machine
 testacc: ## Acceptance tests against the real account. Needs OPALSTACK_TOKEN and the sandbox variables; RUN=TestAccName picks one
 	TF_ACC=1 TF_ACC_TERRAFORM_PATH=$(TERRAFORM) CHECKPOINT_DISABLE=1 go test ./internal/provider -v -p 1 -count=1 -timeout 60m -run '$(or $(RUN),^TestAcc)'
 
+sweep: ## Delete test objects a failed acceptance run left on the real account. Same variables as testacc
+	OPALSTACK_SWEEP=1 go test ./internal/provider -v -count=1 -timeout 60m -run '^TestSweep$$'
+
+docs: ## Regenerate docs/ from the schemas and examples/, and validate it
+	PATH="$(dir $(TERRAFORM)):$$PATH" $(TOOL) tfplugindocs generate --provider-name opalstack
+	PATH="$(dir $(TERRAFORM)):$$PATH" $(TOOL) tfplugindocs validate --provider-name opalstack
+
 lint: ## gofmt, go vet and golangci-lint
 	@test -z "$$(gofmt -l .)" || { gofmt -l .; echo "gofmt: the files above need formatting"; exit 1; }
 	go vet ./...
@@ -42,4 +49,4 @@ leaks: ## Scan the git history and the staged changes for secrets
 
 check: lint test leaks ## Everything that must pass before a commit. Stage first: leaks reads the index
 
-.PHONY: help build install test testacc lint leaks check
+.PHONY: help build install test testacc sweep docs lint leaks check

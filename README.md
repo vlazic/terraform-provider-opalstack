@@ -4,7 +4,7 @@ A Terraform and OpenTofu provider for [Opalstack](https://www.opalstack.com) man
 on terraform-plugin-framework. Opalstack is unrelated to Opal (opal.dev).
 
 **Status: work in progress.** The API client and the provider configuration exist and are tested.
-No resource or data source is implemented yet. [`docs/plan.md`](docs/plan.md) says what comes next.
+No resource or data source is implemented yet. [`PLAN.md`](PLAN.md) says what comes next.
 
 - [`API_FINDINGS.md`](API_FINDINGS.md): what the API does, each fact with its source
 - [`spec/openapi.yaml`](spec/openapi.yaml): the OpenAPI schema as served by the API

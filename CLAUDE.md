@@ -10,7 +10,7 @@ Opalstack is managed hosting. It is unrelated to "Opal" (opal.dev / opalsecurity
 
 **Read [`API_FINDINGS.md`](API_FINDINGS.md) before designing anything.** It is the record of what
 the API does, each fact with its source. Keep it current, and mark anything not proven as
-`UNVERIFIED`. [`docs/plan.md`](docs/plan.md) says where the work stands and what comes next.
+`UNVERIFIED`. [`PLAN.md`](PLAN.md) says where the work stands and what comes next.
 
 ## Hard safety rules
 

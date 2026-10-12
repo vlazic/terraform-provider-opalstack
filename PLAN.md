@@ -1,7 +1,7 @@
 # Where the work stands
 
 Written to be read with no other context. Facts about the API are in
-[`../API_FINDINGS.md`](../API_FINDINGS.md) and are not repeated here.
+[`API_FINDINGS.md`](API_FINDINGS.md) and are not repeated here.
 
 ## Done (2026-10-12)
 
@@ -39,7 +39,7 @@ Written to be read with no other context. Facts about the API are in
 ## Next: resources and acceptance tests
 
 Nothing below may start while the full-access token is the only token. Rule 2 of
-[`../CLAUDE.md`](../CLAUDE.md) is the gate.
+[`CLAUDE.md`](CLAUDE.md) is the gate.
 
 ### Sandbox, done 2026-10-12
 
