@@ -66,13 +66,13 @@ func (f *fakeAPI) removeAll(kind string, prefixes ...string) {
 	}
 }
 
-// count is how many objects removeAll would delete.
-func (f *fakeAPI) count(kind string, prefixes ...string) int {
+// count is how many objects of a kind exist.
+func (f *fakeAPI) count(kind string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	n := 0
 	for _, o := range f.objects {
-		if f.matches(o, kind, prefixes) {
+		if f.matches(o, kind, nil) {
 			n++
 		}
 	}
