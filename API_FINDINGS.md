@@ -260,11 +260,16 @@ object entries are one shell user (read) and one domain (read and write). Output
   objects the token may read. Looking an object up by name, and importing by name, therefore need
   service-level read on that kind; by id they work with an object entry alone.
 - An object entry does give a read by id, and nothing else was visible.
-- **UNVERIFIED:** what such a token gets for an id that does not exist, 403 or 404. If 403, a
-  wait for a deletion cannot see the object go, and `WaitDeleted` would fail with a scoped token.
+- An id that does not exist answers 403 as well, not 404 (`scripts/probe-write.sh`, 2026-10-12,
+  `explore-out/probe-write.txt`). Without the service read switch, "gone" and "not allowed" look
+  the same, so `WaitDeleted` cannot work with such a token.
+- **An object entry does not allow a create.** `POST /domain/create/` for a subdomain of the
+  domain the token has read and write on answered 403. Creating needs the service write switch of
+  the kind, which covers every object of that kind.
 
-The open question this leaves is item 3 below: an object entry names an existing object, so
-nothing in this model obviously lets a token create one.
+So a token cannot be limited to test objects and still create them. Whatever runs the acceptance
+tests holds service-level write on each kind it tests, and the safety prefix in the client is the
+only thing between a test and a real object.
 
 ## UNVERIFIED, needs a write test
 
@@ -274,10 +279,8 @@ sandbox shell user and a scoped token exist.
 1. What a failed create looks like, given that `StateEnum` has no failure value.
 2. Deleting a parent that still has children: a shell user with apps, an app still routed by a
    site, a domain attached to a site. Rejected, cascaded or orphaned?
-3. Whether a token restricted by object ACL can create objects, and then read and delete them.
-   The test token starts with no service switch but ip read, and object entries for the sandbox
-   shell user (read) and the test base domain (read and write). What it can create decides which
-   service switches it needs, and each one turned on widens it to every object of that kind.
+3. Settled: a token restricted by object ACL cannot create (403). Still open: with the service
+   switches on, what a read of a missing id answers (404 expected, as with the full-access token).
 4. `default_password`: present when no `password` is sent? (With one sent: present, different
    from it, and never readable later. See the osuser section.)
 5. Which `json` keys an app accepts per type, and whether the server adds defaults.
@@ -285,5 +288,5 @@ sandbox shell user and a scoped token exist.
 7. Which DNS records a site creates on its own, and whether they appear in `/dnsrecord/list/`.
 8. The 400 body for a validation error (duplicate name, bad enum, bad uuid).
 9. Whether a name can be reused immediately after its delete is queued, or only after teardown.
-10. Settled: an ACL-hidden object answers 403 on `read`. Still open: what a scoped token gets for
-    an id that does not exist.
+10. Settled: an ACL-hidden object answers 403 on `read`, and so does a missing id for a token
+    without the service read switch.
