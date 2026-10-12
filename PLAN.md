@@ -9,11 +9,17 @@ Written to be read with no other context. Facts about the API are in
   official Python wrapper and the owner's runbook.
 - `internal/client`: one-element-array create and update, queued delete, 404/403/401 as distinct
   errors, waiting for ready and for deletion, retries, request spacing, redacted debug log, and the
-  safety prefix. Covered by offline unit tests.
-- `internal/provider`: provider schema and configuration. No resource or data source yet.
-- The built provider loads under Terraform 1.5.0 and 1.11.2 and OpenTofu 1.12.6 through
-  `dev_overrides`. With no resource in the configuration neither CLI calls the provider's
-  `Configure`, so that function is covered by unit tests only.
+  safety prefix, which also covers the objects a write refers to. Covered by offline unit tests.
+- `internal/provider`: five data sources (`opalstack_server`, `opalstack_ip`, `opalstack_osuser`,
+  `opalstack_domain`, `opalstack_app`) and five resources (`opalstack_domain`,
+  `opalstack_dnsrecord`, `opalstack_osuser`, `opalstack_app`, `opalstack_site`), each with
+  timeouts and import.
+- Tests at two levels. `make test` drives every data source and resource through a real terraform
+  binary against an in-memory fake API (`internal/provider/fake_test.go`), offline. `make testacc`
+  runs the five `TestAcc*` tests against the real account; all five passed on 2026-10-12, and each
+  ends by failing if an object with the test prefix is left.
+- `make sweep` deletes leftover test objects. `make docs` regenerates `docs/` from the schemas
+  and `examples/`.
 
 ## Decisions that differ from the first design notes
 
@@ -36,58 +42,46 @@ Written to be read with no other context. Facts about the API are in
 - **`domain` has an update** (`delegated_dns_zone`), which the first notes ruled out.
 - **`dnsrecord` update leaves out `domain` and `type`** although the API accepts them.
 
-## Next: resources and acceptance tests
+- **`opalstack_app.json` manages only the keys the configuration names.** The API fills in
+  settings of its own (`php_version` on an `APA` app), and those never show as a diff.
+- **A type change to or from `CUS` replaces the app.** In place the API changes the type but
+  assigns no port.
+- **A site's domains and routes are sets**, a site needs `ip4_id` or `ip6_id`, and a route `uri`
+  must end with `/`, because the API appends one.
+- **`opalstack_osuser` sets no password.** The API chooses one and reports it once, as
+  `default_password`.
+- **The framework's pointer getters turn an unknown value into a zero.** Requests are built with
+  `knownBool`, `knownInt64` and `knownString` from `internal/provider/resource.go` instead.
 
-Nothing below may start while the full-access token is the only token. Rule 2 of
-[`CLAUDE.md`](CLAUDE.md) is the gate.
-
-### Sandbox, done 2026-10-12
+## The test setup
 
 - A sandbox shell user and a base domain for tests exist on the account. Their names are not in
-  this repository; tests take them from `OPALSTACK_TEST_OSUSER` and `OPALSTACK_TEST_DOMAIN_BASE`.
-  The sandbox user's name deliberately does not start with `tfacc-`, so neither the safety prefix
-  nor a sweeper can ever match it.
-- A test token named `tfacc` exists. Service ACL: ip read only. Object ACL: the sandbox shell user
-  (read) and the base domain (read and write). It goes in `pass` at `Opalstack/tokens/tfacc`.
-- **This token probably cannot create anything yet**, and that is the first thing to find out. See
-  "Token ACLs" in the findings file.
+  this repository; tests take them from `OPALSTACK_TEST_OSUSER`, `OPALSTACK_TEST_OSUSER_ID` and
+  `OPALSTACK_TEST_DOMAIN_BASE`. The sandbox user's name deliberately does not start with
+  `tfacc-`, so neither the safety prefix nor the sweeper can ever match it.
+- The test token (`pass` entry `Opalstack/tokens/tfacc`) has the service read and write switches
+  for domain, dnsrecord, osuser, app and site, and ip read. Opalstack's per-object ACL turned out
+  not to allow creating anything, so **this token can change every object of those five kinds on
+  the account, and the safety prefix is the only thing between a test and a real object**. Every
+  acceptance test configures the provider with `safety_prefix`, and the app and site tests with
+  `safety_osuser_id` as well. Narrow the token again when testing is not in progress.
+- The owner's wrapper that exports those variables and the token lives outside this repository.
 
-### Then, in order
+## Next
 
-1. Refetch the schema (`scripts/explore.sh` saves it as `explore-out/schema.oai-yaml`) and diff it
+1. A guide for adopting an existing account piece by piece (import blocks, what to import first).
+2. The remaining UNVERIFIED items in the findings file: a failed create, deleting a parent that
+   has children, the 400 body shapes, name reuse right after a delete, app settings per type, and
+   a site with `generate_le` on.
+3. Refetch the schema (`scripts/explore.sh` saves it as `explore-out/schema.oai-yaml`) and diff it
    against `spec/openapi.yaml`. The API changed inside v1 between May and October 2026.
-2. Answer item 3 and item 10 of the UNVERIFIED list in the findings file first, with the test
-   token: what can it read and create as scoped, and does a hidden object answer 403 or 404? Start
-   with GETs (a list of each kind, a read of an object outside its ACL), then one create of a
-   `tfacc-` domain under the base domain. Widen the service ACL one switch at a time, only as far
-   as the tests need, and record each step: a service switch covers every object of its kind, so
-   each one is a deliberate trade against the code-level guard.
-3. Data sources: `opalstack_server`, `opalstack_ip`, `opalstack_osuser`, `opalstack_domain`,
-   `opalstack_app`. These need no write.
-4. Resources, one at a time, each with acceptance tests before the next: `opalstack_osuser`,
-   `opalstack_domain`, `opalstack_app`, `opalstack_site`, `opalstack_dnsrecord`. Before the first
-   real write of each kind, show the owner the exact request and wait for an OK.
-5. Done: the safety prefix also checks what a request refers to. An app's shell user must carry
-   the prefix or be the one named by `safety_osuser_id`, and a site's domains and the apps of its
-   routes must carry the prefix. Each referenced object costs one GET.
-6. Sweepers that delete only `tfacc-` objects, never the sandbox user.
-7. Settle the remaining UNVERIFIED items with `tfacc-` objects and update the findings file.
-
-### Design points already known for that work
-
-- `opalstack_osuser`: `name` and `server_id` replace. The API accepts a `password` on create and on
-  update and also returns a server-chosen `default_password` on create. Which of the two the
-  resource exposes depends on UNVERIFIED item 4.
-- `opalstack_domain`: `name` replaces, `delegated_dns_zone` updates in place.
-- `opalstack_app`: `name`, `osuser_id` and `installer_url` replace; `type` and the settings update
-  in place. The settings object has no schema, see UNVERIFIED item 5.
-- `opalstack_site`: everything updates in place. `routes` is replaced as a whole.
-- `opalstack_dnsrecord`: `domain_id` and `type` replace. A site creates DNS records on its own; the
-  resource must not adopt or fight them (UNVERIFIED item 7).
-- Import by name must fail on more than one match. Name uniqueness is observed, not proven.
+4. Not started, and not planned for the first version: mail (address, mailuser), databases
+   (mariadb, psqldb and their users), certificates, a settable shell user password.
+5. A release: `.goreleaser.yml` exists and has never been run.
 
 ## Before this repository is ever made public
 
-- `CLAUDE.md` and `scripts/explore.sh` name a `pass` entry whose path contains an email address.
+- `CLAUDE.md` and the scripts under `scripts/` name `pass` entries, and one of those paths contains
+  an email address.
 - Run `make leaks` over the whole history.
 - Decide the registry namespace. Publishing to the Terraform Registry is permanent.

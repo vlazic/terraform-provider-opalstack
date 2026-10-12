@@ -3,8 +3,13 @@
 A Terraform and OpenTofu provider for [Opalstack](https://www.opalstack.com) managed hosting, built
 on terraform-plugin-framework. Opalstack is unrelated to Opal (opal.dev).
 
-**Status: work in progress.** The API client and the provider configuration exist and are tested.
-No resource or data source is implemented yet. [`PLAN.md`](PLAN.md) says what comes next.
+**Status: private and unreleased.** Five resources and five data sources exist, are documented in
+[`docs/`](docs/index.md), and pass acceptance tests against a real account. [`PLAN.md`](PLAN.md)
+says what is decided and what comes next.
+
+| Resources | Data sources |
+|---|---|
+| `opalstack_domain`, `opalstack_dnsrecord`, `opalstack_osuser`, `opalstack_app`, `opalstack_site` | `opalstack_server`, `opalstack_ip`, `opalstack_osuser`, `opalstack_domain`, `opalstack_app` |
 
 - [`API_FINDINGS.md`](API_FINDINGS.md): what the API does, each fact with its source
 - [`spec/openapi.yaml`](spec/openapi.yaml): the OpenAPI schema as served by the API
@@ -22,7 +27,13 @@ make check    # lint, unit tests and a secret scan. Offline apart from fetching 
 make install  # build the provider into $(go env GOPATH)/bin
 ```
 
-The unit tests never contact Opalstack.
+`make test` never contacts Opalstack: it drives the provider through a real `terraform` binary
+against an in-memory fake API, and skips those tests when no binary is found.
+
+`make testacc` runs the acceptance tests against a real account. They create and delete objects
+named `tfacc-...` and need `OPALSTACK_TOKEN`, `OPALSTACK_TEST_DOMAIN_BASE`, `OPALSTACK_TEST_OSUSER`
+and `OPALSTACK_TEST_OSUSER_ID`. `make sweep` removes what a failed run left behind. Read
+[`CLAUDE.md`](CLAUDE.md) before running either.
 
 ### Using a local build
 

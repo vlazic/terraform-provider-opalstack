@@ -56,11 +56,14 @@ Nothing on it is a test object unless rule 2 says so.
 ## Commands
 
 ```sh
-make build      # go build ./...
-make test       # unit tests, offline
-make lint       # golangci-lint
+make check      # lint, offline tests and a secret scan. Before every commit; stage first
+make test       # unit tests and the fake-API provider tests, offline
+make testacc    # acceptance tests against the real account, test token only. RUN=TestAccSite picks one
+make sweep      # delete tfacc- objects a failed acceptance run left behind
+make docs       # regenerate docs/ from the schemas and examples/
 make install    # go install, for dev_overrides
-scripts/explore.sh   # read-only API survey into explore-out/. Needs pass: the owner runs it.
+scripts/explore.sh       # read-only API survey with the full-access token. The owner runs it.
+scripts/probe-token.sh   # what the test token can see. GET only.
 ```
 
 ## Working here
