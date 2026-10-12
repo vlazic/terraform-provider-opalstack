@@ -35,6 +35,7 @@ type fakeAPI struct {
 
 // defaults are the fields the API fills in on create.
 var defaults = map[string]obj{
+	"app":       {"port": nil, "installer_url": nil},
 	"dnsrecord": {"priority": 10, "ttl": 3600},
 	"domain":    {"delegated_dns_zone": false, "is_valid_hostname": true, "dkim_record": nil, "dkim_pubkey": nil, "dkim_privkey": "PRIVATE"},
 }
@@ -66,6 +67,26 @@ func (f *fakeAPI) removeAll(kind string, prefixes ...string) {
 	}
 }
 
+// named returns the ids of the objects of a kind whose name has the prefix.
+func (f *fakeAPI) named(kind, prefix string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var ids []string
+	for id, o := range f.objects {
+		if f.matches(o, kind, []string{prefix}) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// edit changes an object behind the provider's back.
+func (f *fakeAPI) edit(id string, change func(obj)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	change(f.objects[id])
+}
+
 // count is how many objects of a kind exist.
 func (f *fakeAPI) count(kind string) int {
 	f.mu.Lock()
@@ -95,6 +116,25 @@ func (f *fakeAPI) wrote(kindVerb string) int {
 		}
 	}
 	return n
+}
+
+// fill adds what the API derives from a write: an app's server and shell user
+// name, and a setting of its own next to the ones the caller sent.
+func (f *fakeAPI) fill(kind string, o obj) {
+	if kind != "app" {
+		return
+	}
+	if owner, ok := f.objects[fmt.Sprint(o["osuser"])]; ok {
+		o["osuser_name"], o["server"] = owner["name"], owner["server"]
+	}
+	if _, has := o["port"].(int); o["type"] == portType && !has && o["state"] == nil {
+		o["port"] = 20000 + f.created // assigned on create only, as the API does
+	}
+	settings := obj{"auto_site_url": false}
+	if sent, ok := o["json"].(obj); ok {
+		maps.Copy(settings, sent)
+	}
+	o["json"] = settings
 }
 
 func public(o obj) obj {
@@ -166,6 +206,7 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		o := obj{"_kind": kind, "id": fmt.Sprintf("60000000-0000-0000-0000-%012d", f.created)}
 		maps.Copy(o, defaults[kind])
 		maps.Copy(o, req)
+		f.fill(kind, o)
 		o["state"], o["ready"] = "PENDING_CREATE", false
 		f.objects[o["id"].(string)] = o
 		answer := public(o)
@@ -182,6 +223,7 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch verb {
 	case "update":
 		maps.Copy(o, req)
+		f.fill(kind, o)
 		o["state"], o["ready"] = "PENDING_UPDATE", false
 		reply(http.StatusOK, []obj{public(o)})
 	case "delete":

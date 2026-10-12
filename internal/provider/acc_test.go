@@ -238,3 +238,108 @@ resource "opalstack_osuser" "u" {
 		},
 	})
 }
+
+// accSandboxProvider also names the sandbox shell user, the one unprefixed
+// object a test app may refer to.
+func accSandboxProvider(t *testing.T) (block, osuserID string) {
+	osuserID = accEnv(t, "OPALSTACK_TEST_OSUSER_ID")
+	return fmt.Sprintf(`
+provider "opalstack" {
+  safety_prefix    = %q
+  safety_osuser_id = %q
+}
+`, accPrefix, osuserID), osuserID
+}
+
+// accLogApp records what the API holds for an app's settings, which the spec
+// does not describe. Values under secret-looking keys are left out.
+func accLogApp(t *testing.T, label, addr string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		app, err := accClient(t).Apps().Read(context.Background(), s.RootModule().Resources[addr].Primary.ID)
+		if err != nil {
+			return err
+		}
+		for key, value := range app.JSON {
+			if strings.Contains(key, "pass") || strings.Contains(key, "secret") || strings.Contains(key, "key") || strings.Contains(key, "token") {
+				app.JSON[key] = "REDACTED"
+			} else if s, ok := value.(string); ok && len(s) > 40 {
+				app.JSON[key] = s[:40] + "..."
+			}
+		}
+		t.Logf("FINDING %s: type=%s port=%v installer_url=%v json=%#v", label, app.Type, app.Port != nil, app.InstallerURL != nil, app.JSON)
+		return nil
+	}
+}
+
+func TestAccApp(t *testing.T) {
+	accEnv(t, tokenEnvVar)
+	provider, osuserID := accSandboxProvider(t)
+	first, second := accName(), accName()
+	const addr = "opalstack_app.a"
+	config := func(name, appType, extra string) string {
+		return provider + fmt.Sprintf(`
+resource "opalstack_app" "a" {
+  name      = %q
+  osuser_id = %q
+  type      = %q
+  %s
+}
+`, name, osuserID, appType, extra)
+	}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories,
+		CheckDestroy: func(*terraform.State) error {
+			apps, err := accClient(t).Apps().List(context.Background())
+			if err != nil {
+				return err
+			}
+			for _, a := range apps {
+				if strings.HasPrefix(a.Name, accPrefix) || a.OSUser == osuserID {
+					return fmt.Errorf("a test app was left behind (state %s)", a.State)
+				}
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: config(first, "STA", ""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "name", first),
+					resource.TestCheckResourceAttrSet(addr, "server_id"),
+					resource.TestCheckResourceAttrSet(addr, "osuser_name"),
+					accLogApp(t, "STA as created", addr),
+				),
+			},
+			{Config: config(first, "STA", ""), ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionNoop)},
+			{ResourceName: addr, ImportState: true, ImportStateVerify: true},
+			{ResourceName: addr, ImportState: true, ImportStateVerify: true, ImportStateId: first},
+			{
+				Config:           config(first, "APA", ""),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionUpdate),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "type", "APA"),
+					accLogApp(t, "after STA to APA in place", addr),
+				),
+			},
+			{
+				Config:           config(second, "APA", ""),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
+				Check:            accLogApp(t, "APA as created", addr),
+			},
+			{ // a managed setting; the framework fails the step if a plan remains afterwards
+				Config:           config(second, "APA", `json = jsonencode({ php_version = 83 })`),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionUpdate),
+				Check:            accLogApp(t, "APA with php_version 83", addr),
+			},
+			{ // to CUS the app is replaced: in place the API would assign no port
+				Config:           config(second, "CUS", ""),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet(addr, "port"),
+					accLogApp(t, "CUS as created", addr),
+				),
+			},
+		},
+	})
+}

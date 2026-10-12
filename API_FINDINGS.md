@@ -107,9 +107,18 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
 - `json` on the response holds per-type settings: `php_version`, `fpm_*`, `app_exec`, `url_fopen`,
   `sym_link_path`, `auto_site_url`, `add_https_security_headers`, `external_port_access`,
   `subroot`, and `db_*`/`app_*` keys used by installers. The spec gives the write-side `json` no
-  schema at all. **UNVERIFIED:** which keys are accepted on create and update per type, and
-  whether the server fills defaults into keys the caller omitted (which decides how the provider
-  avoids a permanent diff).
+  schema at all.
+- Observed live by `TestAccApp`, 2026-10-12:
+  - An `STA` app created without `json` has `json` `{}` and no port.
+  - An `APA` app created without `json` has `{"php_version": 73}`: the server fills a default, as
+    a number. Sending `{"php_version": 83}` on update is accepted and reads back as the number 83.
+  - `STA` to `APA` in place works and gains the `php_version` default.
+  - `APA` to `CUS` in place changes `type` but assigns **no port** and keeps the stale
+    `php_version`. A `CUS` app created as such has a port and `json` `{}`. The resource therefore
+    replaces the app on a change to or from `CUS`.
+  - The resource manages only the `json` keys the configuration names, so server-filled defaults
+    never show as a diff.
+- **UNVERIFIED:** the full set of keys accepted per type, and what an invalid key or value answers.
 - Deleting an app removes its directory on the server (runbook).
 - `POST /app/installed/` and `/app/failed/` are callbacks for installer scripts. Not for Terraform.
 
@@ -300,7 +309,8 @@ sandbox shell user and a scoped token exist.
 3. Settled: a token restricted by object ACL cannot create (403). With the service switches on it
    can, and a missing id then answers 404.
 4. Settled: `default_password` is returned whether or not a `password` is sent.
-5. Which `json` keys an app accepts per type, and whether the server adds defaults.
+5. Partly settled, see the app section: the server adds defaults (`php_version` on `APA`). The
+   full set of accepted keys per type is still unknown.
 6. Order preservation of `site.routes` and `site.domains`.
 7. Which DNS records a site creates on its own, and whether they appear in `/dnsrecord/list/`.
 8. The 400 body for a validation error (duplicate name, bad enum, bad uuid). Seen once, as the
