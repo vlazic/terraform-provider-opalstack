@@ -10,13 +10,14 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
-func domainConfig(name string, delegated bool) string {
+// delegatedDomain is a domain with delegated_dns_zone turned on.
+func delegatedDomain(name string) string {
 	return fmt.Sprintf(`
 resource "opalstack_domain" "d" {
   name               = %q
-  delegated_dns_zone = %t
+  delegated_dns_zone = true
 }
-`, name, delegated)
+`, name)
 }
 
 func TestDomainResource(t *testing.T) {
@@ -50,7 +51,7 @@ func TestDomainResource(t *testing.T) {
 				ResourceName: addr, ImportState: true, ImportStateVerify: true, ImportStateId: "tfacc-a.example.com",
 			},
 			{ // update in place
-				Config: block + domainConfig("tfacc-a.example.com", true),
+				Config: block + delegatedDomain("tfacc-a.example.com"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
 					plancheck.ExpectResourceAction(addr, plancheck.ResourceActionUpdate),
 				}},
@@ -65,7 +66,7 @@ func TestDomainResource(t *testing.T) {
 				),
 			},
 			{ // a new name replaces the domain
-				Config: block + domainConfig("tfacc-b.example.com", true),
+				Config: block + delegatedDomain("tfacc-b.example.com"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
 					plancheck.ExpectResourceAction(addr, plancheck.ResourceActionDestroyBeforeCreate),
 				}},
@@ -73,7 +74,7 @@ func TestDomainResource(t *testing.T) {
 			},
 			{ // deleted outside Terraform: the next plan recreates it
 				PreConfig: func() { f.removeAll("domain", "tfacc-b.") },
-				Config:    block + domainConfig("tfacc-b.example.com", true),
+				Config:    block + delegatedDomain("tfacc-b.example.com"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
 					plancheck.ExpectResourceAction(addr, plancheck.ResourceActionCreate),
 				}},

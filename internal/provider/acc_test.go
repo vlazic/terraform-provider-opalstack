@@ -99,12 +99,12 @@ func TestAccDomain(t *testing.T) {
 			{ResourceName: addr, ImportState: true, ImportStateVerify: true},
 			{ResourceName: addr, ImportState: true, ImportStateVerify: true, ImportStateId: first},
 			{
-				Config:           accProvider + domainConfig(first, true),
+				Config:           accProvider + delegatedDomain(first),
 				ConfigPlanChecks: expect(plancheck.ResourceActionUpdate),
 				Check:            resource.TestCheckResourceAttr(addr, "delegated_dns_zone", "true"),
 			},
 			{
-				Config:           accProvider + domainConfig(second, true),
+				Config:           accProvider + delegatedDomain(second),
 				ConfigPlanChecks: expect(plancheck.ResourceActionDestroyBeforeCreate),
 				Check:            resource.TestCheckResourceAttr(addr, "name", second),
 			},
@@ -129,7 +129,7 @@ func TestAccDomain(t *testing.T) {
 						}
 					}
 				},
-				Config:           accProvider + domainConfig(second, true),
+				Config:           accProvider + delegatedDomain(second),
 				ConfigPlanChecks: expect(plancheck.ResourceActionCreate),
 			},
 		},
