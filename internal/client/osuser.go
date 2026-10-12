@@ -13,7 +13,7 @@ type OSUser struct {
 
 type OSUserCreate struct {
 	Server   string `json:"server"`
-	Name     string `json:"name"`
+	Name     string `json:"name,omitempty"`
 	Password string `json:"password,omitempty"`
 }
 

@@ -156,11 +156,32 @@ func TestUpdateIsPartial(t *testing.T) {
 		t.Errorf("body = %s, want %s", f.last().body, want)
 	}
 
-	if _, err := c.Sites().Update(context.Background(), SiteUpdate{ID: idA, Routes: &[]Route{}}); err != nil {
+	// An empty list and an explicit null are both sendable, and distinct from "unchanged".
+	clear := SiteUpdate{ID: idA, Routes: []Route{}, Cert: Null[string](), IP4: Set(idB)}
+	if _, err := c.Sites().Update(context.Background(), clear); err != nil {
 		t.Fatal(err)
 	}
-	if want := `[{"id":"` + idA + `","routes":[]}]`; f.last().body != want {
-		t.Errorf("clearing routes: body = %s, want %s", f.last().body, want)
+	if want := `[{"id":"` + idA + `","ip4":"` + idB + `","routes":[],"cert":null}]`; f.last().body != want {
+		t.Errorf("clearing: body = %s, want %s", f.last().body, want)
+	}
+}
+
+func TestSiteCreateSendsArraysNeverNull(t *testing.T) {
+	f, c, _ := newFake(t)
+	f.on("POST", "/site/create/", ok(`[{"id":"`+idA+`","name":"tfacc-site"}]`))
+	if _, err := c.Sites().Create(context.Background(), SiteCreate{Name: "tfacc-site", Domains: []string{idB}}); err != nil {
+		t.Fatal(err)
+	}
+	if want := `[{"name":"tfacc-site","domains":["` + idB + `"],"routes":[]}]`; f.last().body != want {
+		t.Errorf("body = %s, want %s", f.last().body, want)
+	}
+}
+
+func TestNewRejectsUnusableBaseURL(t *testing.T) {
+	for _, bad := range []string{"my.opalstack.com/api/v1", "ftp://example.com", "https://"} {
+		if _, err := New(Config{Token: testToken, BaseURL: bad}); err == nil {
+			t.Errorf("base URL %q: expected an error", bad)
+		}
 	}
 }
 
@@ -237,9 +258,12 @@ func TestValidationErrorListsFields(t *testing.T) {
 
 func TestReadRefusesMalformedID(t *testing.T) {
 	f, c, _ := newFake(t)
-	for _, id := range []string{"", "../token/list", "a?b"} {
+	for _, id := range []string{"", "../token/list", "a?b", "..", "tfacc-abc123", "%2e%2e%2ftoken%2flist", idA + "x"} {
 		if _, err := c.Apps().Read(context.Background(), id); err == nil || errors.Is(err, ErrNotFound) {
 			t.Errorf("id %q: err = %v, want a refusal that is not ErrNotFound", id, err)
+		}
+		if err := c.Apps().WaitDeleted(context.Background(), id); err == nil {
+			t.Errorf("id %q: WaitDeleted reported it gone", id)
 		}
 	}
 	if n := f.count("", ""); n != 0 {
@@ -250,9 +274,9 @@ func TestReadRefusesMalformedID(t *testing.T) {
 func TestRetries(t *testing.T) {
 	object := ok(`{"id":"` + idA + `","name":"tfacc-x"}`)
 
-	t.Run("GET retries a gateway error", func(t *testing.T) {
+	t.Run("GET retries a server error", func(t *testing.T) {
 		f, c, _ := newFake(t)
-		f.on("GET", "/app/read/"+idA, reply{status: 502}, reply{status: 503}, object)
+		f.on("GET", "/app/read/"+idA, reply{status: 500}, reply{status: 503}, object)
 		if _, err := c.Apps().Read(context.Background(), idA); err != nil {
 			t.Fatal(err)
 		}
@@ -261,14 +285,34 @@ func TestRetries(t *testing.T) {
 		}
 	})
 
-	t.Run("POST does not retry a gateway error", func(t *testing.T) {
-		f, c, _ := newFake(t)
-		f.on("POST", "/app/create/", reply{status: 502}, ok(`[{"id":"`+idA+`"}]`))
-		if _, err := c.Apps().Create(context.Background(), AppCreate{Name: "tfacc-x", OSUser: idB, Type: "STA"}); err == nil {
-			t.Fatal("expected the 502 to be returned")
+	t.Run("POST does not retry a server error", func(t *testing.T) {
+		for _, status := range []int{500, 502} {
+			f, c, _ := newFake(t)
+			f.on("POST", "/app/create/", reply{status: status}, ok(`[{"id":"`+idA+`"}]`))
+			if _, err := c.Apps().Create(context.Background(), AppCreate{Name: "tfacc-x", OSUser: idB, Type: "STA"}); err == nil {
+				t.Fatalf("expected the %d to be returned", status)
+			}
+			if n := f.count("POST", "/app/create/"); n != 1 {
+				t.Errorf("status %d: %d requests, want 1: a repeated create could make a second object", status, n)
+			}
 		}
-		if n := f.count("POST", "/app/create/"); n != 1 {
-			t.Errorf("%d requests, want 1: a repeated create could make a second object", n)
+	})
+
+	t.Run("Retry-After is capped", func(t *testing.T) {
+		f, c, _ := newFake(t)
+		f.on("GET", "/app/read/"+idA, reply{status: 429, header: map[string]string{"Retry-After": "86400"}}, object)
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		_, err := c.Apps().Read(ctx, idA)
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || apiErr.Status != 429 {
+			t.Fatalf("err = %v, want the 429 once the deadline passes", err)
+		}
+		c.mu.Lock()
+		held := time.Until(c.next)
+		c.mu.Unlock()
+		if held > maxRetryAfter || held < maxRetryAfter-5*time.Second {
+			t.Errorf("other requests are held for %v, want about %v", held, maxRetryAfter)
 		}
 	})
 
@@ -390,6 +434,16 @@ func TestSafetyPrefix(t *testing.T) {
 		}
 	})
 
+	t.Run("an update without an id is refused", func(t *testing.T) {
+		f, c := setup(t)
+		if _, err := c.Sites().Update(context.Background(), SiteUpdate{Name: "tfacc-site"}); !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("err = %v, want ErrSafetyPrefix", err)
+		}
+		if n := f.count("", ""); n != 0 {
+			t.Errorf("%d requests were sent", n)
+		}
+	})
+
 	t.Run("a rename out of the prefix is refused", func(t *testing.T) {
 		f, c := setup(t)
 		f.on("GET", "/site/read/"+idA, ok(`{"id":"`+idA+`","name":"tfacc-site"}`))
@@ -420,8 +474,8 @@ func TestSafetyPrefix(t *testing.T) {
 		f, c := setup(t)
 		f.on("GET", "/app/read/"+idA, reply{status: 404, body: `{"id":["Not found."]}`})
 		err := c.Apps().Delete(context.Background(), idA)
-		if !errors.Is(err, ErrSafetyPrefix) || !errors.Is(err, ErrNotFound) {
-			t.Errorf("err = %v, want both ErrSafetyPrefix and ErrNotFound", err)
+		if !errors.Is(err, ErrSafetyPrefix) || errors.Is(err, ErrNotFound) {
+			t.Errorf("err = %v, want ErrSafetyPrefix that does not also match ErrNotFound", err)
 		}
 		if n := posts(f); n != 0 {
 			t.Errorf("%d POST requests were sent", n)
@@ -475,6 +529,41 @@ func TestLogsAreRedacted(t *testing.T) {
 	}
 	if len(*logs) != 3 || !strings.Contains(all, "tfacc-abc123") {
 		t.Errorf("expected 3 log records that keep non-secret fields, got:\n%s", all)
+	}
+}
+
+func TestValidationErrorOnSecretFieldStaysReadable(t *testing.T) {
+	f, c, _ := newFake(t)
+	f.on("POST", "/osuser/update/",
+		reply{status: 400, body: `[{"password":["Ensure this field has at least 10 characters."]}]`},
+		reply{status: 400, body: `[{"password":["The value SECRET-SIX is too common."]}]`})
+
+	_, err := c.OSUsers().Update(context.Background(), OSUserUpdate{ID: idA, Password: "SECRET-SIX"})
+	if !strings.Contains(err.Error(), "at least 10 characters") {
+		t.Errorf("err = %q, want the validation text", err)
+	}
+	_, err = c.OSUsers().Update(context.Background(), OSUserUpdate{ID: idA, Password: "SECRET-SIX"})
+	if strings.Contains(err.Error(), "SECRET-SIX") {
+		t.Errorf("err = %q echoes the password that was sent", err)
+	}
+}
+
+func TestCancelledRequestTakesNoThrottleSlot(t *testing.T) {
+	f, c, _ := newFake(t)
+	c.minInterval = 200 * time.Millisecond
+	f.on("GET", "/ip/list/", ok(`[]`))
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range 5 {
+		_, _ = c.IPs().List(cancelled)
+	}
+	start := time.Now()
+	if _, err := c.IPs().List(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 150*time.Millisecond {
+		t.Errorf("the live request waited %v behind cancelled ones", elapsed)
 	}
 }
 

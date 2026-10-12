@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,8 @@ const (
 	DefaultRequestTimeout = 30 * time.Second
 
 	maxAttempts = 4
+	// maxRetryAfter caps how long a Retry-After header is obeyed.
+	maxRetryAfter = time.Minute
 
 	maxResponseBytes = 16 << 20
 )
@@ -69,6 +72,11 @@ func New(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("opalstack: a token is required")
 	}
 	cfg.BaseURL = strings.TrimRight(cmp.Or(cfg.BaseURL, DefaultBaseURL), "/")
+	// A URL the client cannot use would otherwise fail on every request and be
+	// retried as if it were a network fault.
+	if u, err := url.Parse(cfg.BaseURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return nil, fmt.Errorf("opalstack: base URL %q is not an http(s) URL with a host", cfg.BaseURL)
+	}
 	cfg.UserAgent = cmp.Or(cfg.UserAgent, "terraform-provider-opalstack")
 	cfg.RequestTimeout = cmp.Or(cfg.RequestTimeout, DefaultRequestTimeout)
 	if cfg.HTTPClient == nil {
@@ -110,12 +118,18 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, out a
 			return nil
 		}
 		if err == nil {
-			err = newAPIError(method, path, status, respBody)
+			err = newAPIError(method, path, status, respBody, c.secretsIn(body))
 		}
 		if attempt == maxAttempts || !retryable(method, status) || ctx.Err() != nil {
 			return err
 		}
-		if sleep(ctx, max(c.retryBase<<(attempt-1), retryAfter)) != nil {
+		delay := max(c.retryBase<<(attempt-1), min(retryAfter, maxRetryAfter))
+		if status == http.StatusTooManyRequests {
+			// A rate limit applies to the account, not to this call: hold back
+			// every other request for as long as this one waits.
+			c.holdUntil(time.Now().Add(delay))
+		}
+		if sleep(ctx, delay) != nil {
 			return err
 		}
 	}
@@ -123,17 +137,15 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, out a
 
 // retryable is the whole retry policy. status is 0 for a transport error.
 //
-// A GET may always be sent again. A POST may be repeated only on 429, which
-// means the request was not processed: after a gateway or transport error the
-// server may have acted on it, and a second create would make a second object.
+// A GET may be sent again after a transport error or any 5xx. A POST may be
+// repeated only on 429, which means the request was not processed: after a
+// server or transport error the server may have acted on it, and a second
+// create would make a second object.
 func retryable(method string, status int) bool {
-	switch status {
-	case http.StatusTooManyRequests:
+	if status == http.StatusTooManyRequests {
 		return true
-	case 0, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
-		return method == http.MethodGet
 	}
-	return false
+	return method == http.MethodGet && (status == 0 || status >= 500)
 }
 
 func (c *Client) roundTrip(ctx context.Context, method, path string, body []byte) (int, []byte, time.Duration, error) {
@@ -186,6 +198,10 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, body []byte
 
 // throttle spaces requests at least minInterval apart across all goroutines.
 func (c *Client) throttle(ctx context.Context) error {
+	// A request that is already cancelled must not take a slot others wait behind.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	now := time.Now()
 	start := c.next
@@ -195,6 +211,15 @@ func (c *Client) throttle(ctx context.Context) error {
 	c.next = start.Add(c.minInterval)
 	c.mu.Unlock()
 	return sleep(ctx, start.Sub(now))
+}
+
+// holdUntil keeps every request from starting before t.
+func (c *Client) holdUntil(t time.Time) {
+	c.mu.Lock()
+	if c.next.Before(t) {
+		c.next = t
+	}
+	c.mu.Unlock()
 }
 
 func (c *Client) log(ctx context.Context, msg string, fields map[string]any) {

@@ -21,8 +21,12 @@ Written to be read with no other context. Facts about the API are in
   on ready, on an error from the read, or on the caller's deadline. Its timeout error names the
   last state seen.
 - **Deletion is detected by 404 on `read`**, not by polling the list. `WaitReady` returns the object from the poll that reported ready.
-- **A POST is not retried on a gateway error or a transport error**, only on 429. A repeated
-  create could make a second object. A GET is retried on 429, 502, 503 and 504.
+- **A POST is not retried on a server error or a transport error**, only on 429. A repeated
+  create could make a second object. A GET is retried on 429, on any 5xx and on a transport error.
+  A `Retry-After` header is obeyed up to one minute, and a 429 holds back every other request too.
+- **An id that is not a UUID is refused before any request.** The API answers such an id with 404,
+  which would read as "deleted".
+- **A safety-prefix refusal never matches `ErrNotFound`**, even when the lookup behind it did.
 - **The safety prefix costs one extra GET per update and delete**, because those requests carry an
   id and the prefix is a property of the name. When the name cannot be read the write is refused.
 - **The safety prefix also checks the new name of a rename**, and refuses any write it cannot tie
@@ -58,8 +62,10 @@ Nothing below may start while the full-access token is the only token. Rule 2 of
 4. Resources, one at a time, each with acceptance tests before the next: `opalstack_osuser`,
    `opalstack_domain`, `opalstack_app`, `opalstack_site`, `opalstack_dnsrecord`. Before the first
    real write of each kind, show the owner the exact request and wait for an OK.
-5. The safety prefix so far checks names only. Add the second condition before any app or site
-   test: the object must belong to the sandbox shell user.
+5. The safety prefix checks the name of the object written, and nothing the request merely
+   references. Before any app or site test, add: an app's shell user must be the sandbox user, and
+   a site's domains and the apps of its routes must themselves carry the prefix. Without that, a
+   test site named `tfacc-...` could be created over a real domain.
 6. Sweepers that delete only `tfacc-` objects, never the sandbox user.
 7. Settle the remaining UNVERIFIED items with `tfacc-` objects and update the findings file.
 

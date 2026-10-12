@@ -28,9 +28,10 @@ lint: ## gofmt, go vet and golangci-lint
 # module as the linters, it does not compile, because their dependencies clash.
 GITLEAKS := github.com/zricethezav/gitleaks/v8@v8.30.1
 
-leaks: ## Scan the git history for secrets
+leaks: ## Scan the git history and the staged changes for secrets
 	GOTOOLCHAIN=auto go run $(GITLEAKS) git --no-banner --redact .
+	GOTOOLCHAIN=auto go run $(GITLEAKS) git --no-banner --redact --pre-commit --staged .
 
-check: lint test leaks ## Everything that must pass before a commit
+check: lint test leaks ## Everything that must pass before a commit. Stage first: leaks reads the index
 
 .PHONY: help build install test lint leaks check

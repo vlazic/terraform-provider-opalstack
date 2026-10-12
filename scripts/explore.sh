@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Read-only exploration of the Opalstack API. GET requests only, by construction:
-# the single curl call below has no -X, no -d and no --data.
+# neither curl call below has -X, -d or --data.
 #
 # Writes to explore-out/ (git-ignored). Every list response is reduced to field
-# names, JSON types and enum values before it touches disk, so no object name,
-# UUID, IP address or domain of the real account is ever written.
+# names, JSON types and enum values before it is written there, so no object
+# name, UUID, IP address or domain of the real account reaches that directory.
+# Raw responses exist only in a private temporary directory, in memory where the
+# system offers one, which is removed when the script exits.
+#
+# It stops at the first 429 or 5xx answer rather than keep sending.
 #
 # The token is read from pass (or OPALSTACK_TOKEN) and handed to curl on stdin,
 # never on the command line and never to a file.
@@ -20,6 +24,7 @@ readonly KINDS=(server ip osuser domain app site dnsrecord)
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly OUT="$ROOT/explore-out"
 mkdir -p "$OUT"
+rm -f "$OUT"/*.new   # left behind by an interrupted run
 
 TOKEN="${OPALSTACK_TOKEN:-}"
 if [[ -z "$TOKEN" ]]; then
@@ -31,15 +36,27 @@ TOKEN="${TOKEN//[[:space:]]/}"
 [[ "$TOKEN" =~ ^[A-Za-z0-9_-]{20,}$ ]] || { echo "FATAL: token has an unexpected shape (length ${#TOKEN})" >&2; exit 1; }
 echo "explore: token length ${#TOKEN}" >&2
 
-BODY="$(mktemp)"; HDRS="$(mktemp)"
-trap 'rm -f "$BODY" "$HDRS"' EXIT
+TMP="$(mktemp -d -p "${XDG_RUNTIME_DIR:-/tmp}" opal-explore.XXXXXX)"
+trap 'rm -rf "$TMP"' EXIT
+readonly BODY="$TMP/body" HDRS="$TMP/headers"
 
 # get <path> [accept]  ->  prints the status code; body in $BODY, headers in $HDRS
 get() {
-  local path="$1" accept="${2:-application/json}"
+  local path="$1" accept="${2:-application/json}" code
   sleep 0.5
-  curl -sS -o "$BODY" -D "$HDRS" -w '%{http_code}' \
-    -H "Accept: $accept" -K - "$API$path" <<<"header = \"Authorization: Token $TOKEN\""
+  code="$(curl -sS --max-time 60 -o "$BODY" -D "$HDRS" -w '%{http_code}' \
+    -H "Accept: $accept" -K - "$API$path" <<<"header = \"Authorization: Token $TOKEN\"")"
+  if [[ "$code" == "429" || "$code" == 5* ]]; then
+    echo "FATAL: GET $path answered $code; stopping instead of sending more" >&2
+    exit 1
+  fi
+  printf '%s' "$code"
+}
+
+# shape <jq-filter>: prints the reduced form of $BODY, or a marker. On failure it
+# prints neither the body nor jq's message, since both can quote real values.
+shape() {
+  jq "$1" "$BODY" 2>/dev/null || echo "(could not reduce the body: $(wc -c <"$BODY") bytes)"
 }
 
 # Field names and types, merged across every element. Values never appear, except
@@ -68,7 +85,7 @@ for variant in "plain|application/json|" "json|application/json|?format=json" \
   IFS='|' read -r label accept query <<<"$variant"
   code="$(get "/schema/$query" "$accept")"
   printf '%s %s %s\n' "$label" "$code" "$(wc -c <"$BODY")" >>"$OUT/schema-status.txt.new"
-  if [[ "$code" == "200" && ! -s "$OUT/schema.$label" ]]; then cp "$BODY" "$OUT/schema.$label"; fi
+  if [[ "$code" == "200" ]]; then cp "$BODY" "$OUT/schema.$label"; fi
 done
 mv "$OUT/schema-status.txt.new" "$OUT/schema-status.txt"
 
@@ -78,7 +95,7 @@ for kind in "${KINDS[@]}"; do
   if [[ "$kind" == "${KINDS[0]}" ]]; then
     grep -viE '^(set-cookie|authorization):' "$HDRS" >"$OUT/list-headers.txt" || true
   fi
-  { echo "status: $code"; jq "$SHAPE" "$BODY" 2>&1 || echo "(body is not JSON)"; } >"$OUT/$kind.list.txt"
+  { echo "status: $code"; shape "$SHAPE"; } >"$OUT/$kind.list.txt"
 
   for id in "$ZERO_UUID" "not-a-uuid"; do
     code="$(get "/$kind/read/$id")"
@@ -93,7 +110,7 @@ for probe in "osuser|server" "app|osuser,server" "site|domains,ip4" "dnsrecord|d
   IFS='|' read -r kind embed <<<"$probe"
   code="$(get "/$kind/list/?embed=$embed")"
   { echo "GET /$kind/list/?embed=$embed"; echo "status: $code"
-    jq "$SHAPE | (.fields // .)" "$BODY" 2>&1 || head -c 400 "$BODY"; echo; } >>"$OUT/embed.txt.new"
+    shape "$SHAPE | (.fields // .)"; echo; } >>"$OUT/embed.txt.new"
 done
 mv "$OUT/embed.txt.new" "$OUT/embed.txt"
 
@@ -102,11 +119,11 @@ get "/app/list/" >/dev/null
 jq '{apps: length,
      names_shared_across_osusers: (group_by(.name) | map(select((map(.osuser) | unique | length) > 1)) | length),
      names_repeated_within_one_osuser: (group_by([.osuser, .name]) | map(select(length > 1)) | length)}' \
-  "$BODY" >"$OUT/app.uniqueness.txt"
+  "$BODY" 2>/dev/null >"$OUT/app.uniqueness.txt"
 
 # 5. Auth failure shape, with a token that cannot be valid.
 sleep 0.5
-curl -sS -o "$BODY" -w '%{http_code}' -H "Authorization: Token 0000000000000000000000000000000000000000" \
+curl -sS --max-time 60 -o "$BODY" -w '%{http_code}' -H "Authorization: Token 0000000000000000000000000000000000000000" \
   "$API/osuser/list/" >"$OUT/unauthorized.txt"
 { echo; head -c 400 "$BODY"; echo; } >>"$OUT/unauthorized.txt"
 

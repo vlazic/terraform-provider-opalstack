@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -35,10 +36,10 @@ func (k ReadKind[T]) Read(ctx context.Context, id string) (*T, error) {
 }
 
 func read[T any](ctx context.Context, c *Client, kind, id string) (*T, error) {
-	// An id that is not a UUID is answered with an HTML 404, which would read as
-	// "deleted". Refuse anything that could also change the path.
-	if id == "" || strings.ContainsAny(id, "/?#") {
-		return nil, fmt.Errorf("opalstack: %q is not a valid %s id", id, kind)
+	// The API answers 404 for an id that is not a UUID, which would read as
+	// "deleted". Such an id is refused here, which also keeps it out of the path.
+	if !uuidPattern.MatchString(id) {
+		return nil, fmt.Errorf("opalstack: %q is not a valid %s id: expected a UUID", id, kind)
 	}
 	var out T
 	if err := c.get(ctx, "/"+kind+"/read/"+id, &out); err != nil {
@@ -46,6 +47,8 @@ func read[T any](ctx context.Context, c *Client, kind, id string) (*T, error) {
 	}
 	return &out, nil
 }
+
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$`)
 
 // Kind adds the write side. C is the create request and U the update request.
 type Kind[T statused, C, U any] struct {
@@ -132,7 +135,12 @@ func (k Kind[T, C, U]) postOne(ctx context.Context, verb string, req any) (*T, e
 //   - a request with a "name" creates or renames, and the new name is checked;
 //   - a request with the kind's parent field is checked on that parent's name.
 //
-// Anything it cannot establish is a refusal.
+// Anything it cannot establish is a refusal. A refusal never matches
+// ErrNotFound, even when a lookup failed that way: the object the caller asked
+// about may well exist, and "not found" would let a resource drop it from state.
+//
+// The guard does not look at objects a request merely references, such as the
+// domains and apps of a site or the shell user of an app.
 func (k Kind[T, C, U]) guard(ctx context.Context, verb string, req any) error {
 	prefix := k.c.cfg.SafetyPrefix
 	if prefix == "" {
@@ -156,10 +164,14 @@ func (k Kind[T, C, U]) guard(ctx context.Context, verb string, req any) error {
 	type named struct{ what, name string }
 	var names []named
 
-	if id := field("id"); id != "" {
+	id := field("id")
+	if id == "" && verb != "create" {
+		return refuse("the request has no id")
+	}
+	if id != "" {
 		name, err := k.nameOf(ctx, id)
 		if err != nil {
-			return refuse("cannot read %s to check its name: %w", id, err)
+			return refuse("cannot read %s to check its name: %v", id, err)
 		}
 		names = append(names, named{"its current name", name})
 	}
@@ -169,7 +181,7 @@ func (k Kind[T, C, U]) guard(ctx context.Context, verb string, req any) error {
 	if parentID := field(k.parentField); k.parentField != "" && parentID != "" {
 		name, err := k.parent().nameOf(ctx, parentID)
 		if err != nil {
-			return refuse("cannot read %s %s to check its name: %w", k.parentKind, parentID, err)
+			return refuse("cannot read %s %s to check its name: %v", k.parentKind, parentID, err)
 		}
 		names = append(names, named{"the name of its " + k.parentKind, name})
 	}

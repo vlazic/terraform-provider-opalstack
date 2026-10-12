@@ -25,9 +25,10 @@ type AppCreate struct {
 // AppUpdate can change the type and the settings. The name, the shell user and
 // the installer are fixed at creation.
 type AppUpdate struct {
-	ID   string         `json:"id"`
-	Type string         `json:"type,omitempty"`
-	JSON map[string]any `json:"json,omitempty"`
+	ID   string `json:"id"`
+	Type string `json:"type,omitempty"`
+	// JSON is left out when nil. An empty, non-nil map is sent as {}.
+	JSON map[string]any `json:"json,omitzero"`
 }
 
 func (c *Client) Apps() Kind[App, AppCreate, AppUpdate] {

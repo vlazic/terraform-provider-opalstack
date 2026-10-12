@@ -4,6 +4,7 @@ package provider
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -83,12 +84,23 @@ func (p *opalstackProvider) Configure(ctx context.Context, req provider.Configur
 	}
 
 	// A value that is only known after apply cannot configure a client now.
-	for name, v := range map[string]types.String{
-		"token": cfg.Token, "base_url": cfg.BaseURL, "safety_prefix": cfg.SafetyPrefix, "request_timeout": cfg.RequestTimeout,
+	for _, setting := range []struct {
+		name  string
+		value types.String
+	}{
+		{"token", cfg.Token}, {"base_url", cfg.BaseURL}, {"safety_prefix", cfg.SafetyPrefix}, {"request_timeout", cfg.RequestTimeout},
 	} {
-		if v.IsUnknown() {
-			resp.Diagnostics.AddAttributeError(path.Root(name), "Unknown provider setting",
-				"The value of "+name+" is not known until apply. Set it to a static value or use the "+tokenEnvVar+" environment variable.")
+		if setting.value.IsUnknown() {
+			resp.Diagnostics.AddAttributeError(path.Root(setting.name), "Unknown provider setting",
+				"The value of "+setting.name+" is not known until apply. Set it to a value that is known at plan time.")
+		}
+	}
+
+	// The token travels in a header on every request, so plain http is refused.
+	if s := cfg.BaseURL.ValueString(); s != "" {
+		if u, err := url.Parse(s); err != nil || u.Scheme != "https" || u.Host == "" {
+			resp.Diagnostics.AddAttributeError(path.Root("base_url"), "Invalid base_url",
+				"Expected an https URL such as "+client.DefaultBaseURL+", got "+s+".")
 		}
 	}
 

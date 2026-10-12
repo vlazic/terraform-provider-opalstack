@@ -77,6 +77,15 @@ func TestConfigure(t *testing.T) {
 		}
 	})
 
+	t.Run("bad base_url", func(t *testing.T) {
+		for _, bad := range []string{"my.opalstack.com/api/v1", "http://my.opalstack.com/api/v1"} {
+			resp := configure(t, map[string]tftypes.Value{"token": str(token), "base_url": str(bad)})
+			if !resp.Diagnostics.HasError() {
+				t.Errorf("base_url %q: expected an error", bad)
+			}
+		}
+	})
+
 	t.Run("bad request_timeout", func(t *testing.T) {
 		for _, bad := range []string{"soon", "-5s", "0s"} {
 			resp := configure(t, map[string]tftypes.Value{"token": str(token), "request_timeout": str(bad)})
