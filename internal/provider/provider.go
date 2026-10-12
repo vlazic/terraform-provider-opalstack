@@ -1,0 +1,139 @@
+// Package provider is the Terraform side: schema, configuration and, later,
+// the resources and data sources. All API access goes through internal/client.
+package provider
+
+import (
+	"context"
+	"os"
+	"time"
+
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/provider"
+	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
+
+	"github.com/vlazic/terraform-provider-opalstack/internal/client"
+)
+
+const tokenEnvVar = "OPALSTACK_TOKEN"
+
+var _ provider.Provider = (*opalstackProvider)(nil)
+
+type opalstackProvider struct {
+	version string
+}
+
+type providerModel struct {
+	Token          types.String `tfsdk:"token"`
+	BaseURL        types.String `tfsdk:"base_url"`
+	SafetyPrefix   types.String `tfsdk:"safety_prefix"`
+	RequestTimeout types.String `tfsdk:"request_timeout"`
+}
+
+// New returns the provider factory that main and the tests serve.
+func New(version string) func() provider.Provider {
+	return func() provider.Provider {
+		return &opalstackProvider{version: version}
+	}
+}
+
+func (p *opalstackProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
+	resp.TypeName = "opalstack"
+	resp.Version = p.version
+}
+
+func (p *opalstackProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		MarkdownDescription: "Manages resources of an [Opalstack](https://www.opalstack.com) hosting account through its REST API.",
+		Attributes: map[string]schema.Attribute{
+			"token": schema.StringAttribute{
+				MarkdownDescription: "API token. Defaults to the `" + tokenEnvVar + "` environment variable.",
+				Optional:            true,
+				Sensitive:           true,
+			},
+			"base_url": schema.StringAttribute{
+				MarkdownDescription: "API base URL. Defaults to `" + client.DefaultBaseURL + "`.",
+				Optional:            true,
+			},
+			"safety_prefix": schema.StringAttribute{
+				MarkdownDescription: "When set, the provider refuses to create, update or delete any object whose name " +
+					"does not start with this prefix. A DNS record is judged by the name of its domain. " +
+					"Meant for development and testing against an account that also holds real objects.",
+				Optional: true,
+			},
+			"request_timeout": schema.StringAttribute{
+				MarkdownDescription: "Limit for a single API request, as a duration such as `30s`. Defaults to `30s`. " +
+					"Waiting for an object to become ready is governed by each resource's `timeouts` instead.",
+				Optional: true,
+			},
+		},
+	}
+}
+
+func (p *opalstackProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+	var cfg providerModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// A value that is only known after apply cannot configure a client now.
+	for name, v := range map[string]types.String{
+		"token": cfg.Token, "base_url": cfg.BaseURL, "safety_prefix": cfg.SafetyPrefix, "request_timeout": cfg.RequestTimeout,
+	} {
+		if v.IsUnknown() {
+			resp.Diagnostics.AddAttributeError(path.Root(name), "Unknown provider setting",
+				"The value of "+name+" is not known until apply. Set it to a static value or use the "+tokenEnvVar+" environment variable.")
+		}
+	}
+
+	token := cfg.Token.ValueString()
+	if token == "" {
+		token = os.Getenv(tokenEnvVar)
+	}
+	if token == "" && !resp.Diagnostics.HasError() {
+		resp.Diagnostics.AddAttributeError(path.Root("token"), "Missing Opalstack API token",
+			"Set the token attribute or the "+tokenEnvVar+" environment variable.")
+	}
+
+	var timeout time.Duration
+	if s := cfg.RequestTimeout.ValueString(); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil || d <= 0 {
+			resp.Diagnostics.AddAttributeError(path.Root("request_timeout"), "Invalid request_timeout",
+				"Expected a positive duration such as 30s or 2m, got "+s+".")
+		}
+		timeout = d
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	c, err := client.New(client.Config{
+		Token:          token,
+		BaseURL:        cfg.BaseURL.ValueString(),
+		UserAgent:      "terraform-provider-opalstack/" + p.version,
+		SafetyPrefix:   cfg.SafetyPrefix.ValueString(),
+		RequestTimeout: timeout,
+		Log: func(ctx context.Context, msg string, fields map[string]any) {
+			tflog.Debug(ctx, msg, fields)
+		},
+	})
+	if err != nil {
+		resp.Diagnostics.AddError("Cannot create the Opalstack client", err.Error())
+		return
+	}
+	resp.ResourceData = c
+	resp.DataSourceData = c
+}
+
+func (p *opalstackProvider) Resources(context.Context) []func() resource.Resource {
+	return nil
+}
+
+func (p *opalstackProvider) DataSources(context.Context) []func() datasource.DataSource {
+	return nil
+}
