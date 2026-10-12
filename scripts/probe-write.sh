@@ -67,7 +67,9 @@ masked() {
 say() { echo "$*" | tee -a "$OUT"; }
 
 : >"$OUT"
-NAME="tfacc-probe-$(tr -dc 'a-z0-9' </dev/urandom | head -c 6).$OPALSTACK_TEST_DOMAIN_BASE"
+# No pipe from /dev/urandom here: under pipefail the reader closing early kills the script.
+printf -v SUFFIX '%06x' $(((RANDOM << 15 | RANDOM) & 0xffffff))
+NAME="tfacc-probe-$SUFFIX.$OPALSTACK_TEST_DOMAIN_BASE"
 
 code="$(call "/domain/read/$ZERO_UUID")"
 say "read missing id      $code  $(masked)"
