@@ -168,19 +168,12 @@ func (r *dnsRecordResource) Update(ctx context.Context, req resource.UpdateReque
 }
 
 func (r *dnsRecordResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var m dnsRecordModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &m)...)
-	ctx, cancel := withTimeout(ctx, m.Timeouts.Delete, &resp.Diagnostics)
-	defer cancel()
-	if resp.Diagnostics.HasError() {
-		return
-	}
-	resp.Diagnostics.Append(deleteAndWait(ctx, r.client.DNSRecords(), "DNS record", m.ID.ValueString())...)
+	deleteResource(ctx, req, resp, r.client.DNSRecords(), "DNS record")
 }
 
 // A record has no name, so it is imported by UUID only.
 func (r *dnsRecordResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	if !uuidPattern.MatchString(req.ID) {
+	if !client.IsUUID(req.ID) {
 		resp.Diagnostics.AddError("Invalid import id", "A DNS record is imported by its UUID.")
 		return
 	}

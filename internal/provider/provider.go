@@ -4,7 +4,6 @@ package provider
 
 import (
 	"context"
-	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -27,8 +26,8 @@ var _ provider.Provider = (*opalstackProvider)(nil)
 
 type opalstackProvider struct {
 	version string
-	// httpClient is nil outside the tests, which use it to reach a fake API.
-	httpClient *http.Client
+	// tune is nil outside the tests, which use it to point the client at a fake API.
+	tune func(*client.Config)
 }
 
 type providerModel struct {
@@ -137,24 +136,24 @@ func (p *opalstackProvider) Configure(ctx context.Context, req provider.Configur
 		return
 	}
 
-	c, err := client.New(client.Config{
+	clientConfig := client.Config{
 		Token:          token,
 		BaseURL:        cfg.BaseURL.ValueString(),
 		UserAgent:      "terraform-provider-opalstack/" + p.version,
 		SafetyPrefix:   cfg.SafetyPrefix.ValueString(),
 		SafetyOSUserID: cfg.SafetyOSUserID.ValueString(),
 		RequestTimeout: timeout,
-		HTTPClient:     p.httpClient,
 		Log: func(ctx context.Context, msg string, fields map[string]any) {
 			tflog.Debug(ctx, msg, fields)
 		},
-	})
+	}
+	if p.tune != nil {
+		p.tune(&clientConfig)
+	}
+	c, err := client.New(clientConfig)
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot create the Opalstack client", err.Error())
 		return
-	}
-	if p.httpClient != nil {
-		c.SetPacing(0, time.Millisecond) // a fake API needs no pacing
 	}
 	resp.ResourceData = c
 	resp.DataSourceData = c

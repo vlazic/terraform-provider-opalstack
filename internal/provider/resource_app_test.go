@@ -23,9 +23,7 @@ resource "opalstack_app" "a" {
 }
 `, name, osuserID, appType, extra)
 	}
-	expect := func(action plancheck.ResourceActionType) resource.ConfigPlanChecks {
-		return resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(addr, action)}}
-	}
+	expect := func(action plancheck.ResourceActionType) resource.ConfigPlanChecks { return accExpect(addr, action) }
 	unchanged := func(config string) resource.TestStep {
 		return resource.TestStep{Config: config, ConfigPlanChecks: expect(plancheck.ResourceActionNoop)}
 	}
@@ -33,7 +31,7 @@ resource "opalstack_app" "a" {
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: factories,
 		CheckDestroy: func(*terraform.State) error {
-			if n := len(f.named("app", "tfacc-")); n != 0 {
+			if n := len(f.ids("app", "tfacc-")); n != 0 {
 				return fmt.Errorf("%d apps were left behind", n)
 			}
 			return nil
@@ -63,7 +61,7 @@ resource "opalstack_app" "a" {
 			unchanged(config("tfacc-app", "APA", `json = "{ \"php_version\" : 83 }"`)),
 			{ // a managed setting changed outside Terraform is put back
 				PreConfig: func() {
-					for _, id := range f.named("app", "tfacc-") {
+					for _, id := range f.ids("app", "tfacc-") {
 						f.edit(id, func(o obj) { o["json"].(obj)["php_version"] = float64(74) })
 					}
 				},

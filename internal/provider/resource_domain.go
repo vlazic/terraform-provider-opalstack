@@ -160,14 +160,7 @@ func (r *domainResource) Update(ctx context.Context, req resource.UpdateRequest,
 }
 
 func (r *domainResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var m domainModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &m)...)
-	ctx, cancel := withTimeout(ctx, m.Timeouts.Delete, &resp.Diagnostics)
-	defer cancel()
-	if resp.Diagnostics.HasError() {
-		return
-	}
-	resp.Diagnostics.Append(deleteAndWait(ctx, r.client.Domains(), "domain", m.ID.ValueString())...)
+	deleteResource(ctx, req, resp, r.client.Domains(), "domain")
 }
 
 func (r *domainResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

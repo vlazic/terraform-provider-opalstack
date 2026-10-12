@@ -25,7 +25,10 @@ type ReadKind[T any] struct {
 // ref is a field holding the id of an object of another kind. path is dotted:
 // "routes.app" is the app of each element of routes. The field may hold one id
 // or a list of them.
-type ref struct{ path, kind string }
+//
+// exempt, when set, is the one id the field may hold although that object's
+// name lacks the safety prefix.
+type ref struct{ path, kind, exempt string }
 
 func (r ref) ids(fields map[string]any) []string {
 	return refIDs(fields, strings.Split(r.path, "."))
@@ -68,7 +71,7 @@ func (k ReadKind[T]) Read(ctx context.Context, id string) (*T, error) {
 func read[T any](ctx context.Context, c *Client, kind, id string) (*T, error) {
 	// The API answers 404 for an id that is not a UUID, which would read as
 	// "deleted". Such an id is refused here, which also keeps it out of the path.
-	if !uuidPattern.MatchString(id) {
+	if !IsUUID(id) {
 		return nil, fmt.Errorf("opalstack: %q is not a valid %s id: expected a UUID", id, kind)
 	}
 	var out T
@@ -79,6 +82,9 @@ func read[T any](ctx context.Context, c *Client, kind, id string) (*T, error) {
 }
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$`)
+
+// IsUUID reports whether s has the form of an object id.
+func IsUUID(s string) bool { return uuidPattern.MatchString(s) }
 
 // Kind adds the write side. C is the create request and U the update request.
 type Kind[T statused, C, U any] struct {
@@ -165,7 +171,7 @@ func (k Kind[T, C, U]) postOne(ctx context.Context, verb string, req any) (*T, e
 //   - a request with a "name" creates or renames, and the new name is checked;
 //   - every object the request refers to through one of the kind's refs, such
 //     as the domains and apps of a site, is checked on its name too. The one
-//     exception is the shell user named by Config.SafetyOSUserID.
+//     exception is a ref's exempt id.
 //
 // Anything it cannot establish is a refusal. A refusal never matches
 // ErrNotFound, even when a lookup failed that way: the object the caller asked
@@ -189,44 +195,55 @@ func (k Kind[T, C, U]) guard(ctx context.Context, verb string, req any) error {
 	}
 	field := func(name string) string { s, _ := fields[name].(string); return s }
 
-	// Each entry is a name that must carry the prefix, with how it was found.
-	type named struct{ what, name string }
-	var names []named
+	// Each name is checked as soon as it is known, so a request that fails on
+	// its own name costs no lookup. checked counts them: a request that names
+	// nothing at all cannot be judged and is refused.
+	checked := 0
+	check := func(what, name string) error {
+		checked++
+		if !strings.HasPrefix(name, prefix) {
+			return refuse("%s, %q, does not start with %q", what, name, prefix)
+		}
+		return nil
+	}
 
 	id := field("id")
 	if id == "" && verb != "create" {
 		return refuse("the request has no id")
+	}
+	if name := field("name"); name != "" {
+		if err := check("the requested name", name); err != nil {
+			return err
+		}
 	}
 	if id != "" {
 		name, err := k.nameOf(ctx, id)
 		if err != nil {
 			return refuse("cannot read %s to check its name: %v", id, err)
 		}
-		names = append(names, named{"its current name", name})
+		if err := check("its current name", name); err != nil {
+			return err
+		}
 	}
-	if name := field("name"); name != "" {
-		names = append(names, named{"the requested name", name})
-	}
+	seen := map[ref]bool{} // a site may route several paths to one app
 	for _, r := range k.refs {
 		for _, refID := range r.ids(fields) {
-			if r.kind == "osuser" && refID == k.c.cfg.SafetyOSUserID {
+			target := ref{kind: r.kind, path: refID}
+			if (r.exempt != "" && refID == r.exempt) || seen[target] {
 				continue
 			}
+			seen[target] = true
 			name, err := k.other(r.kind).nameOf(ctx, refID)
 			if err != nil {
 				return refuse("cannot read %s %s to check its name: %v", r.kind, refID, err)
 			}
-			names = append(names, named{"the name of the " + r.kind + " it refers to", name})
+			if err := check("the name of the "+r.kind+" it refers to", name); err != nil {
+				return err
+			}
 		}
 	}
-
-	if len(names) == 0 {
+	if checked == 0 {
 		return refuse("the request names nothing the prefix %q could be checked against", prefix)
-	}
-	for _, n := range names {
-		if !strings.HasPrefix(n.name, prefix) {
-			return refuse("%s, %q, does not start with %q", n.what, n.name, prefix)
-		}
 	}
 	return nil
 }

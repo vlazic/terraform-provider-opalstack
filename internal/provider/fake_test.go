@@ -14,10 +14,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
+
+	"github.com/vlazic/terraform-provider-opalstack/internal/client"
 )
 
 type obj = map[string]any
@@ -56,55 +59,31 @@ func (f *fakeAPI) seed(kind string, o obj) {
 	f.objects[o["id"].(string)] = stored
 }
 
-// removeAll deletes the objects of a kind whose name has one of the prefixes,
-// or all of them when none is given, behind the provider's back.
-func (f *fakeAPI) removeAll(kind string, prefixes ...string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for id, o := range f.objects {
-		if f.matches(o, kind, prefixes) {
-			delete(f.objects, id)
-		}
-	}
-}
-
-// named returns the ids of the objects of a kind whose name has the prefix.
-func (f *fakeAPI) named(kind, prefix string) []string {
+// ids returns the objects of a kind whose name has one of the prefixes, or all
+// of them when none is given.
+func (f *fakeAPI) ids(kind string, prefixes ...string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var ids []string
 	for id, o := range f.objects {
-		if f.matches(o, kind, []string{prefix}) {
+		name, _ := o["name"].(string)
+		if o["_kind"] == kind && (len(prefixes) == 0 ||
+			slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(name, p) })) {
 			ids = append(ids, id)
 		}
 	}
 	return ids
 }
 
-// edit changes an object behind the provider's back.
+// edit changes an object behind the provider's back; a nil change deletes it.
 func (f *fakeAPI) edit(id string, change func(obj)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	change(f.objects[id])
-}
-
-// count is how many objects of a kind exist.
-func (f *fakeAPI) count(kind string) int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	n := 0
-	for _, o := range f.objects {
-		if f.matches(o, kind, nil) {
-			n++
-		}
+	if change == nil {
+		delete(f.objects, id)
+		return
 	}
-	return n
-}
-
-func (f *fakeAPI) matches(o obj, kind string, prefixes []string) bool {
-	name, _ := o["name"].(string)
-	return o["_kind"] == kind && (len(prefixes) == 0 ||
-		slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(name, p) }))
+	change(f.objects[id])
 }
 
 func (f *fakeAPI) wrote(kindVerb string) int {
@@ -121,7 +100,7 @@ func (f *fakeAPI) wrote(kindVerb string) int {
 
 // fill adds what the API derives from a write: an app's server and shell user
 // name, and a setting of its own next to the ones the caller sent.
-func (f *fakeAPI) fill(kind string, o obj) {
+func (f *fakeAPI) fill(kind string, o obj, creating bool) {
 	if kind == "site" {
 		// Each route gets an id, and the site lives where its first app does.
 		routes, _ := o["routes"].([]any)
@@ -140,7 +119,7 @@ func (f *fakeAPI) fill(kind string, o obj) {
 	if owner, ok := f.objects[fmt.Sprint(o["osuser"])]; ok {
 		o["osuser_name"], o["server"] = owner["name"], owner["server"]
 	}
-	if _, has := o["port"].(int); o["type"] == portType && !has && o["state"] == nil {
+	if creating && o["type"] == portType {
 		o["port"] = 20000 + f.created // assigned on create only, as the API does
 	}
 	settings := obj{"auto_site_url": false}
@@ -219,7 +198,7 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		o := obj{"_kind": kind, "id": fmt.Sprintf("60000000-0000-0000-0000-%012d", f.created)}
 		maps.Copy(o, defaults[kind])
 		maps.Copy(o, req)
-		f.fill(kind, o)
+		f.fill(kind, o, true)
 		o["state"], o["ready"] = "PENDING_CREATE", false
 		f.objects[o["id"].(string)] = o
 		answer := public(o)
@@ -236,7 +215,7 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch verb {
 	case "update":
 		maps.Copy(o, req)
-		f.fill(kind, o)
+		f.fill(kind, o, false)
 		o["state"], o["ready"] = "PENDING_UPDATE", false
 		reply(http.StatusOK, []obj{public(o)})
 	case "delete":
@@ -266,7 +245,10 @@ func fakeProvider(t *testing.T) (*fakeAPI, map[string]func() (tfprotov6.Provider
 	t.Cleanup(srv.Close)
 
 	factories := map[string]func() (tfprotov6.ProviderServer, error){
-		"opalstack": providerserver.NewProtocol6WithError(provider.Provider(&opalstackProvider{version: "test", httpClient: srv.Client()})),
+		"opalstack": providerserver.NewProtocol6WithError(provider.Provider(&opalstackProvider{version: "test", tune: func(cfg *client.Config) {
+			cfg.HTTPClient = srv.Client()
+			cfg.RequestInterval, cfg.PollInterval = time.Nanosecond, time.Millisecond // a fake API needs no pacing
+		}})),
 	}
 	block := fmt.Sprintf(`
 provider "opalstack" {

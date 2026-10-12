@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -18,8 +18,6 @@ import (
 // defaultTimeout bounds each wait for the API to finish a queued change, unless
 // the resource's timeouts block says otherwise.
 const defaultTimeout = 10 * time.Minute
-
-var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$`)
 
 // baseResource is what every resource shares: the configured client.
 type baseResource struct {
@@ -54,31 +52,47 @@ func readForState[T any](ctx context.Context, k client.ReadKind[T], what, id str
 	return obj
 }
 
-// deleteAndWait queues the deletion and waits for the object to be gone. An
-// object that is already gone is not an error.
-func deleteAndWait[K interface {
+// deleteResource is the whole Delete of a resource: it queues the deletion and
+// waits, within the delete timeout, for the object to be gone. An object that
+// is already gone is not an error.
+func deleteResource(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse, k interface {
 	Delete(context.Context, string) error
 	WaitDeleted(context.Context, string) error
-}](ctx context.Context, k K, what, id string) diag.Diagnostics {
-	var diags diag.Diagnostics
-	if err := k.Delete(ctx, id); err != nil {
+}, what string) {
+	var id types.String
+	var configured timeouts.Value
+	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("id"), &id)...)
+	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("timeouts"), &configured)...)
+	ctx, cancel := withTimeout(ctx, configured.Delete, &resp.Diagnostics)
+	defer cancel()
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if err := k.Delete(ctx, id.ValueString()); err != nil {
 		if !errors.Is(err, client.ErrNotFound) {
-			diags.AddError("Cannot delete the "+what, err.Error())
+			resp.Diagnostics.AddError("Cannot delete the "+what, err.Error())
 		}
-		return diags
+		return
 	}
-	if err := k.WaitDeleted(ctx, id); err != nil {
-		diags.AddError("The "+what+" was not deleted in time", err.Error())
+	if err := k.WaitDeleted(ctx, id.ValueString()); err != nil {
+		resp.Diagnostics.AddError("The "+what+" was not deleted in time", err.Error())
 	}
-	return diags
+}
+
+// withTimeout bounds ctx by one of a resource's configured timeouts. The caller
+// checks diags afterwards, which also covers reading the plan or state before.
+func withTimeout(ctx context.Context, configured func(context.Context, time.Duration) (time.Duration, diag.Diagnostics), diags *diag.Diagnostics) (context.Context, context.CancelFunc) {
+	timeout, d := configured(ctx, defaultTimeout)
+	diags.Append(d...)
+	return context.WithTimeout(ctx, timeout)
 }
 
 // importByIDOrName sets the id attribute from an import id that is either the
 // UUID of the object or its name.
 func importByIDOrName[T any](ctx context.Context, k client.ReadKind[T], what string, nameAndID func(T) (name, id string), req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	id := req.ID
-	if !uuidPattern.MatchString(id) {
-		obj, diags := find(ctx, k, what, types.StringNull(), func(o T) bool {
+	if !client.IsUUID(id) {
+		obj, diags := findOne(ctx, k, what, func(o T) bool {
 			name, _ := nameAndID(o)
 			return name == req.ID
 		})
@@ -106,14 +120,6 @@ func knownInt64(v types.Int64) *int64 {
 		return nil
 	}
 	return v.ValueInt64Pointer()
-}
-
-// withTimeout bounds ctx by one of a resource's configured timeouts. The caller
-// checks diags afterwards, which also covers reading the plan or state before.
-func withTimeout(ctx context.Context, configured func(context.Context, time.Duration) (time.Duration, diag.Diagnostics), diags *diag.Diagnostics) (context.Context, context.CancelFunc) {
-	timeout, d := configured(ctx, defaultTimeout)
-	diags.Append(d...)
-	return context.WithTimeout(ctx, timeout)
 }
 
 func knownString(v types.String) *string {

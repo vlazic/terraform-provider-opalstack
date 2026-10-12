@@ -151,6 +151,10 @@ func collectSecrets(v any, underSecretKey bool, out *[]string) {
 
 var secretKey = regexp.MustCompile(`(?i)password|secret|key|token`)
 
+// IsSecretKey reports whether a JSON key looks like it holds a secret, by the
+// same rule the client redacts its own logs and errors with.
+func IsSecretKey(key string) bool { return secretKey.MatchString(key) }
+
 const redacted = "REDACTED"
 
 // redactJSON returns body with the value of every secret-looking key replaced.

@@ -33,6 +33,6 @@ type AppUpdate struct {
 
 func (c *Client) Apps() Kind[App, AppCreate, AppUpdate] {
 	k := kind[App, AppCreate, AppUpdate](c, "app")
-	k.refs = []ref{{"osuser", "osuser"}}
+	k.refs = []ref{{path: "osuser", kind: "osuser", exempt: c.cfg.SafetyOSUserID}}
 	return k
 }

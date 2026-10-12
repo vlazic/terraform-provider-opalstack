@@ -8,7 +8,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
@@ -23,7 +22,6 @@ import (
 var (
 	_ resource.ResourceWithConfigure   = (*appResource)(nil)
 	_ resource.ResourceWithImportState = (*appResource)(nil)
-	_ resource.ResourceWithModifyPlan  = (*appResource)(nil)
 )
 
 // portType is the one app type that listens on a port of its own.
@@ -98,28 +96,32 @@ func (r *appResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp
 				MarkdownDescription: "Per-type settings as a JSON object, for example `jsonencode({ php_version = 83 })`. " +
 					"Only the keys given here are managed: the API adds settings of its own, and those are left alone " +
 					"and not shown. The `opalstack_app` data source shows all of them.",
-				Optional: true,
+				Optional:      true,
+				PlanModifiers: []planmodifier.String{sameJSON{}},
 			},
 			"timeouts": timeouts.Attributes(ctx, timeouts.Opts{Create: true, Update: true, Delete: true}),
 		},
 	}
 }
 
-// ModifyPlan keeps json written another way from showing as a change.
-func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
-		return // create or destroy
-	}
-	var state, plan appModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	if resp.Diagnostics.HasError() || plan.JSON.IsNull() || plan.JSON.IsUnknown() || state.JSON.IsNull() {
+// sameJSON keeps the state's value when the configuration says the same thing
+// written another way, so that formatting is not planned as a change.
+type sameJSON struct{}
+
+func (sameJSON) Description(context.Context) string {
+	return "Equal JSON written differently is not a change."
+}
+func (m sameJSON) MarkdownDescription(ctx context.Context) string { return m.Description(ctx) }
+
+func (sameJSON) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	if req.StateValue.IsNull() || req.PlanValue.IsNull() || req.PlanValue.IsUnknown() {
 		return
 	}
-	same, diags := plan.JSON.StringSemanticEquals(ctx, state.JSON)
+	same, diags := jsontypes.NewNormalizedValue(req.PlanValue.ValueString()).
+		StringSemanticEquals(ctx, jsontypes.NewNormalizedValue(req.StateValue.ValueString()))
 	resp.Diagnostics.Append(diags...)
 	if same {
-		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("json"), state.JSON)...)
+		resp.PlanValue = req.StateValue
 	}
 }
 
@@ -136,10 +138,8 @@ func (m *appModel) settings() (map[string]any, diag.Diagnostics) {
 	return out, diags
 }
 
-// set copies what the API reports. The json attribute keeps its value as long
-// as the API agrees with it on every key it names; otherwise it becomes what
-// the API has for those keys, which shows as drift.
-func (m *appModel) set(a *client.App) diag.Diagnostics {
+// set copies what the API reports, except for json: see refreshJSON.
+func (m *appModel) set(a *client.App) {
 	m.ID = types.StringValue(a.ID)
 	m.Name = types.StringValue(a.Name)
 	m.OSUserID = types.StringValue(a.OSUser)
@@ -148,7 +148,13 @@ func (m *appModel) set(a *client.App) diag.Diagnostics {
 	m.Type = types.StringValue(a.Type)
 	m.Port = types.Int64PointerValue(a.Port)
 	m.InstallerURL = types.StringPointerValue(a.InstallerURL)
+}
 
+// refreshJSON is for Read only. The json attribute keeps its value as long as
+// the API agrees with it on every key it names; otherwise it becomes what the
+// API has for those keys, which shows as drift. Create and Update leave json
+// alone, because Terraform requires an apply to return what was in the plan.
+func (m *appModel) refreshJSON(ctx context.Context, a *client.App) diag.Diagnostics {
 	managed, diags := m.settings()
 	if managed == nil || diags.HasError() {
 		return diags
@@ -165,7 +171,7 @@ func (m *appModel) set(a *client.App) diag.Diagnostics {
 		return diags
 	}
 	reported := jsontypes.NewNormalizedValue(string(raw))
-	if equal, d := m.JSON.StringSemanticEquals(context.Background(), reported); !equal {
+	if equal, d := m.JSON.StringSemanticEquals(ctx, reported); !equal {
 		diags.Append(d...)
 		m.JSON = reported
 	}
@@ -182,7 +188,6 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	planned := m.JSON
 
 	apps := r.client.Apps()
 	created, err := apps.Create(ctx, client.AppCreate{
@@ -197,10 +202,7 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 	// In state before the wait, so a wait that fails does not leave an orphan.
-	// Terraform requires the planned json to come back unchanged from an apply;
-	// a setting the API changed or dropped shows as drift on the next plan.
-	resp.Diagnostics.Append(m.set(created)...)
-	m.JSON = planned
+	m.set(created)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 
 	ready, err := apps.WaitReady(ctx, created.ID)
@@ -208,8 +210,7 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		resp.Diagnostics.AddError("The app did not become ready", err.Error())
 		return
 	}
-	resp.Diagnostics.Append(m.set(ready)...)
-	m.JSON = planned
+	m.set(ready)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }
 
@@ -223,7 +224,8 @@ func (r *appResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 	if app == nil {
 		return
 	}
-	resp.Diagnostics.Append(m.set(app)...)
+	m.set(app)
+	resp.Diagnostics.Append(m.refreshJSON(ctx, app)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }
 
@@ -237,7 +239,6 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	planned := m.JSON
 
 	apps := r.client.Apps()
 	if _, err := apps.Update(ctx, client.AppUpdate{ID: m.ID.ValueString(), Type: m.Type.ValueString(), JSON: settings}); err != nil {
@@ -249,20 +250,12 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		resp.Diagnostics.AddError("The app did not become ready", err.Error())
 		return
 	}
-	resp.Diagnostics.Append(m.set(ready)...)
-	m.JSON = planned
+	m.set(ready)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }
 
 func (r *appResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var m appModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &m)...)
-	ctx, cancel := withTimeout(ctx, m.Timeouts.Delete, &resp.Diagnostics)
-	defer cancel()
-	if resp.Diagnostics.HasError() {
-		return
-	}
-	resp.Diagnostics.Append(deleteAndWait(ctx, r.client.Apps(), "app", m.ID.ValueString())...)
+	deleteResource(ctx, req, resp, r.client.Apps(), "app")
 }
 
 func (r *appResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

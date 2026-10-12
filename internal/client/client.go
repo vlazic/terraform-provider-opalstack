@@ -53,6 +53,12 @@ type Config struct {
 	// RequestTimeout bounds a single HTTP round trip.
 	RequestTimeout time.Duration
 
+	// RequestInterval is the spacing between requests and PollInterval the first
+	// delay between the polls of a wait. The defaults, about 3 requests per
+	// second and 2 seconds, suit the live API; a fake one needs neither.
+	RequestInterval time.Duration
+	PollInterval    time.Duration
+
 	HTTPClient *http.Client
 	Log        LogFunc
 }
@@ -90,19 +96,11 @@ func New(cfg Config) (*Client, error) {
 	}
 	return &Client{
 		cfg:         cfg,
-		minInterval: 350 * time.Millisecond, // just under 3 requests per second
+		minInterval: cmp.Or(cfg.RequestInterval, 350*time.Millisecond), // just under 3 requests per second
 		retryBase:   time.Second,
-		pollMin:     2 * time.Second,
+		pollMin:     cmp.Or(cfg.PollInterval, 2*time.Second),
 		pollMax:     15 * time.Second,
 	}, nil
-}
-
-// SetPacing replaces the spacing between requests and the first delay between
-// the polls of a wait. The defaults suit the live API; this is for a client
-// that talks to a fake one.
-func (c *Client) SetPacing(betweenRequests, betweenPolls time.Duration) {
-	c.minInterval, c.pollMin = betweenRequests, betweenPolls
-	c.pollMax = max(c.pollMax, betweenPolls)
 }
 
 // get performs a GET and decodes the response into out.

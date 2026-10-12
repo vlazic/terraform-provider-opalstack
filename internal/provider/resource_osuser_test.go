@@ -25,7 +25,7 @@ func TestOSUserResource(t *testing.T) {
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: factories,
 		CheckDestroy: func(*terraform.State) error {
-			if n := f.count("osuser"); n != 0 {
+			if n := len(f.ids("osuser")); n != 0 {
 				return fmt.Errorf("%d shell users were left behind", n)
 			}
 			return nil
@@ -48,11 +48,9 @@ func TestOSUserResource(t *testing.T) {
 				ExpectNonEmptyPlan: false,
 			},
 			{ // a new name replaces the shell user
-				Config: block + osuserConfig("tfacc-two", serverID),
-				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
-					plancheck.ExpectResourceAction(addr, plancheck.ResourceActionDestroyBeforeCreate),
-				}},
-				Check: resource.TestCheckResourceAttr(addr, "default_password", "fake-default-password"),
+				Config:           block + osuserConfig("tfacc-two", serverID),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
+				Check:            resource.TestCheckResourceAttr(addr, "default_password", "fake-default-password"),
 			},
 		},
 	})

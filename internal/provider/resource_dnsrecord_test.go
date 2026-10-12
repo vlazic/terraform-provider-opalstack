@@ -24,14 +24,12 @@ resource "opalstack_dnsrecord" "r" {
 }
 `, recordType, content, extra)
 	}
-	expect := func(action plancheck.ResourceActionType) resource.ConfigPlanChecks {
-		return resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(addr, action)}}
-	}
+	expect := func(action plancheck.ResourceActionType) resource.ConfigPlanChecks { return accExpect(addr, action) }
 
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: factories,
 		CheckDestroy: func(*terraform.State) error {
-			if n := f.count("dnsrecord") + f.count("domain"); n != 0 {
+			if n := len(f.ids("dnsrecord")) + len(f.ids("domain")); n != 0 {
 				return fmt.Errorf("%d objects were left behind", n)
 			}
 			return nil
@@ -61,7 +59,11 @@ resource "opalstack_dnsrecord" "r" {
 				ConfigPlanChecks: expect(plancheck.ResourceActionDestroyBeforeCreate),
 			},
 			{ // deleted outside Terraform: the next plan recreates it
-				PreConfig:        func() { f.removeAll("dnsrecord") },
+				PreConfig: func() {
+					for _, id := range f.ids("dnsrecord") {
+						f.edit(id, nil)
+					}
+				},
 				Config:           config("TXT", "hello", "ttl = 300"),
 				ConfigPlanChecks: expect(plancheck.ResourceActionCreate),
 			},

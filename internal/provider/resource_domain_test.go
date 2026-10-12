@@ -28,7 +28,7 @@ func TestDomainResource(t *testing.T) {
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: factories,
 		CheckDestroy: func(*terraform.State) error {
-			if n := f.count("domain"); n != 0 {
+			if n := len(f.ids("domain")); n != 0 {
 				return fmt.Errorf("%d domains were left behind", n)
 			}
 			return nil
@@ -51,10 +51,8 @@ func TestDomainResource(t *testing.T) {
 				ResourceName: addr, ImportState: true, ImportStateVerify: true, ImportStateId: "tfacc-a.example.com",
 			},
 			{ // update in place
-				Config: block + delegatedDomain("tfacc-a.example.com"),
-				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
-					plancheck.ExpectResourceAction(addr, plancheck.ResourceActionUpdate),
-				}},
+				Config:           block + delegatedDomain("tfacc-a.example.com"),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionUpdate),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(addr, "delegated_dns_zone", "true"),
 					resource.TestCheckResourceAttrWith(addr, "id", func(id string) error {
@@ -66,18 +64,18 @@ func TestDomainResource(t *testing.T) {
 				),
 			},
 			{ // a new name replaces the domain
-				Config: block + delegatedDomain("tfacc-b.example.com"),
-				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
-					plancheck.ExpectResourceAction(addr, plancheck.ResourceActionDestroyBeforeCreate),
-				}},
-				Check: resource.TestCheckResourceAttr(addr, "name", "tfacc-b.example.com"),
+				Config:           block + delegatedDomain("tfacc-b.example.com"),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
+				Check:            resource.TestCheckResourceAttr(addr, "name", "tfacc-b.example.com"),
 			},
 			{ // deleted outside Terraform: the next plan recreates it
-				PreConfig: func() { f.removeAll("domain", "tfacc-b.") },
-				Config:    block + delegatedDomain("tfacc-b.example.com"),
-				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
-					plancheck.ExpectResourceAction(addr, plancheck.ResourceActionCreate),
-				}},
+				PreConfig: func() {
+					for _, id := range f.ids("domain", "tfacc-b.") {
+						f.edit(id, nil)
+					}
+				},
+				Config:           block + delegatedDomain("tfacc-b.example.com"),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionCreate),
 			},
 		},
 	})

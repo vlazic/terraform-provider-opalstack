@@ -65,21 +65,30 @@ func accClient(t *testing.T) *client.Client {
 	return c
 }
 
-// accNoDomainsLeft fails when any domain with the test prefix still exists,
-// whichever test made it.
-func accNoDomainsLeft(t *testing.T) resource.TestCheckFunc {
+// accNoneLeft fails when any object of a kind still has the test prefix,
+// whichever test made it. The client is built when the check runs: building it
+// earlier would need a token in a run that skips the acceptance tests.
+func accNoneLeft[T any](t *testing.T, what string, kind func(*client.Client) client.ReadKind[T], name func(T) string) resource.TestCheckFunc {
 	return func(*terraform.State) error {
-		domains, err := accClient(t).Domains().List(context.Background())
+		all, err := kind(accClient(t)).List(context.Background())
 		if err != nil {
 			return err
 		}
-		for _, d := range domains {
-			if strings.HasPrefix(d.Name, accPrefix) {
-				return fmt.Errorf("a test domain was left behind (state %s)", d.State)
+		for _, o := range all {
+			if strings.HasPrefix(name(o), accPrefix) {
+				return fmt.Errorf("a test %s was left behind", what)
 			}
 		}
 		return nil
 	}
+}
+
+func accNoDomainsLeft(t *testing.T) resource.TestCheckFunc {
+	return accNoneLeft(t, "domain", func(c *client.Client) client.ReadKind[client.Domain] { return c.Domains().ReadKind }, func(d client.Domain) string { return d.Name })
+}
+
+func accNoAppsLeft(t *testing.T) resource.TestCheckFunc {
+	return accNoneLeft(t, "app", func(c *client.Client) client.ReadKind[client.App] { return c.Apps().ReadKind }, func(a client.App) string { return a.Name })
 }
 
 func accExpect(addr string, action plancheck.ResourceActionType) resource.ConfigPlanChecks {
@@ -208,18 +217,7 @@ resource "opalstack_osuser" "u" {
 
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: accFactories,
-		CheckDestroy: func(*terraform.State) error {
-			users, err := accClient(t).OSUsers().List(context.Background())
-			if err != nil {
-				return err
-			}
-			for _, u := range users {
-				if strings.HasPrefix(u.Name, accPrefix) {
-					return fmt.Errorf("a test shell user was left behind (state %s)", u.State)
-				}
-			}
-			return nil
-		},
+		CheckDestroy:             accNoneLeft(t, "shell user", func(c *client.Client) client.ReadKind[client.OSUser] { return c.OSUsers().ReadKind }, func(u client.OSUser) string { return u.Name }),
 		Steps: []resource.TestStep{
 			{
 				Config: config(first),
@@ -262,7 +260,7 @@ func accLogApp(t *testing.T, label string) resource.TestCheckFunc {
 			return err
 		}
 		for key, value := range app.JSON {
-			if strings.Contains(key, "pass") || strings.Contains(key, "secret") || strings.Contains(key, "key") || strings.Contains(key, "token") {
+			if client.IsSecretKey(key) {
 				app.JSON[key] = "REDACTED"
 			} else if s, ok := value.(string); ok && len(s) > 40 {
 				app.JSON[key] = s[:40] + "..."
@@ -291,18 +289,7 @@ resource "opalstack_app" "a" {
 
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: accFactories,
-		CheckDestroy: func(*terraform.State) error {
-			apps, err := accClient(t).Apps().List(context.Background())
-			if err != nil {
-				return err
-			}
-			for _, a := range apps {
-				if strings.HasPrefix(a.Name, accPrefix) || a.OSUser == osuserID {
-					return fmt.Errorf("a test app was left behind (state %s)", a.State)
-				}
-			}
-			return nil
-		},
+		CheckDestroy:             accNoAppsLeft(t),
 		Steps: []resource.TestStep{
 			{
 				Config: config(first, "STA", ""),
@@ -442,29 +429,11 @@ resource "opalstack_site" "s" {
 			}
 			return stepErr
 		},
-		CheckDestroy: func(s *terraform.State) error {
-			ctx := context.Background()
-			c := accClient(t)
-			sites, err := c.Sites().List(ctx)
-			if err != nil {
-				return err
-			}
-			for _, site := range sites {
-				if strings.HasPrefix(site.Name, accPrefix) {
-					return fmt.Errorf("a test site was left behind (state %s)", site.State)
-				}
-			}
-			apps, err := c.Apps().List(ctx)
-			if err != nil {
-				return err
-			}
-			for _, a := range apps {
-				if strings.HasPrefix(a.Name, accPrefix) {
-					return fmt.Errorf("a test app was left behind (state %s)", a.State)
-				}
-			}
-			return accNoDomainsLeft(t)(s)
-		},
+		CheckDestroy: resource.ComposeAggregateTestCheckFunc(
+			accNoneLeft(t, "site", func(c *client.Client) client.ReadKind[client.Site] { return c.Sites().ReadKind }, func(s client.Site) string { return s.Name }),
+			accNoAppsLeft(t),
+			accNoDomainsLeft(t),
+		),
 		Steps: []resource.TestStep{
 			{
 				Config: config(minimal),

@@ -63,8 +63,14 @@ func find[T any](ctx context.Context, k client.ReadKind[T], what string, id type
 		}
 		return obj, diags
 	}
+	return findOne(ctx, k, what, match)
+}
+
+// findOne lists the kind and returns the one object that match accepts.
+func findOne[T any](ctx context.Context, k client.ReadKind[T], what string, match func(T) bool) (*T, diag.Diagnostics) {
 	all, err := k.List(ctx)
 	if err != nil {
+		var diags diag.Diagnostics
 		diags.AddError("Cannot list the "+what+"s", err.Error())
 		return nil, diags
 	}

@@ -132,14 +132,7 @@ func (r *osuserResource) Update(ctx context.Context, req resource.UpdateRequest,
 }
 
 func (r *osuserResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var m osuserModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &m)...)
-	ctx, cancel := withTimeout(ctx, m.Timeouts.Delete, &resp.Diagnostics)
-	defer cancel()
-	if resp.Diagnostics.HasError() {
-		return
-	}
-	resp.Diagnostics.Append(deleteAndWait(ctx, r.client.OSUsers(), "shell user", m.ID.ValueString())...)
+	deleteResource(ctx, req, resp, r.client.OSUsers(), "shell user")
 }
 
 func (r *osuserResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

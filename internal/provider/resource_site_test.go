@@ -34,9 +34,7 @@ resource "opalstack_site" "s" {
 }
 `, osuserID, site)
 	}
-	expect := func(action plancheck.ResourceActionType) resource.ConfigPlanChecks {
-		return resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(addr, action)}}
-	}
+	expect := func(action plancheck.ResourceActionType) resource.ConfigPlanChecks { return accExpect(addr, action) }
 	const minimal = `
   name       = "tfacc-site"
   domain_ids = [opalstack_domain.a.id]
@@ -46,7 +44,7 @@ resource "opalstack_site" "s" {
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: factories,
 		CheckDestroy: func(*terraform.State) error {
-			if n := f.count("site"); n != 0 {
+			if n := len(f.ids("site")); n != 0 {
 				return fmt.Errorf("%d sites were left behind", n)
 			}
 			return nil

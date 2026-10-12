@@ -258,14 +258,7 @@ func (r *siteResource) Update(ctx context.Context, req resource.UpdateRequest, r
 }
 
 func (r *siteResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var m siteModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &m)...)
-	ctx, cancel := withTimeout(ctx, m.Timeouts.Delete, &resp.Diagnostics)
-	defer cancel()
-	if resp.Diagnostics.HasError() {
-		return
-	}
-	resp.Diagnostics.Append(deleteAndWait(ctx, r.client.Sites(), "site", m.ID.ValueString())...)
+	deleteResource(ctx, req, resp, r.client.Sites(), "site")
 }
 
 func (r *siteResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

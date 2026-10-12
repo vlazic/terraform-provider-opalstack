@@ -64,7 +64,7 @@ func (d *ipDataSource) Read(ctx context.Context, req datasource.ReadRequest, res
 		primary = m.Primary.ValueBool()
 	}
 
-	ip, diags := find(ctx, d.client.IPs(), "IP address", types.StringNull(), func(ip client.IP) bool {
+	ip, diags := findOne(ctx, d.client.IPs(), "IP address", func(ip client.IP) bool {
 		return ip.Server == m.ServerID.ValueString() && ip.Type == family && ip.Primary == primary
 	})
 	resp.Diagnostics.Append(diags...)
