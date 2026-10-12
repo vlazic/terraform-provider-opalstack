@@ -7,9 +7,12 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setdefault"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/vlazic/terraform-provider-opalstack/internal/client"
@@ -52,13 +55,16 @@ func readForState[T any](ctx context.Context, k client.ReadKind[T], what, id str
 	return obj
 }
 
+// deleter is the part of a kind that removes an object.
+type deleter interface {
+	Delete(context.Context, string) error
+	WaitDeleted(context.Context, string) error
+}
+
 // deleteResource is the whole Delete of a resource: it queues the deletion and
 // waits, within the delete timeout, for the object to be gone. An object that
 // is already gone is not an error.
-func deleteResource(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse, k interface {
-	Delete(context.Context, string) error
-	WaitDeleted(context.Context, string) error
-}, what string) {
+func deleteResource(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse, k deleter, what string) {
 	var id types.String
 	var configured timeouts.Value
 	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("id"), &id)...)
@@ -137,4 +143,39 @@ func changedString(plan, state types.String) client.Nullable[string] {
 		return client.Nullable[string]{}
 	}
 	return client.FromPtr(plan.ValueStringPointer())
+}
+
+// stringOrNull is for a value the API reports only sometimes, such as the
+// password in the answer to a create.
+func stringOrNull(s string) types.String {
+	if s == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(s)
+}
+
+// idSetAttribute is a set of strings that is empty unless the configuration
+// fills it: the users of a database, the mailboxes of an address.
+func idSetAttribute(description string) schema.SetAttribute {
+	return schema.SetAttribute{
+		MarkdownDescription: description,
+		ElementType:         types.StringType,
+		Optional:            true,
+		Computed:            true,
+		Default:             setdefault.StaticValue(types.SetValueMust(types.StringType, []attr.Value{})),
+	}
+}
+
+// stringsOf reads a set of strings. The result is never nil, so a request
+// carries an empty list where the configuration has none.
+func stringsOf(ctx context.Context, set types.Set, diags *diag.Diagnostics) []string {
+	out := []string{}
+	diags.Append(set.ElementsAs(ctx, &out, false)...)
+	return out
+}
+
+func stringSet(ctx context.Context, values []string, diags *diag.Diagnostics) types.Set {
+	set, d := types.SetValueFrom(ctx, types.StringType, values)
+	diags.Append(d...)
+	return set
 }

@@ -47,6 +47,13 @@ leaks: ## Scan the git history and the staged changes for secrets
 	GOTOOLCHAIN=auto go run $(GITLEAKS) git --no-banner --redact .
 	GOTOOLCHAIN=auto go run $(GITLEAKS) git --no-banner --redact --pre-commit --staged .
 
+# goreleaser is run the same way, for the same reason.
+GORELEASER := GOTOOLCHAIN=auto go run github.com/goreleaser/goreleaser/v2@v2.18.3
+
+snapshot: ## Build every release archive into dist/ without a tag, a signature or an upload
+	$(GORELEASER) check
+	$(GORELEASER) release --snapshot --clean --skip=sign
+
 check: lint test leaks ## Everything that must pass before a commit. Stage first: leaks reads the index
 
-.PHONY: help build install test testacc sweep docs lint leaks check
+.PHONY: help build install test testacc sweep docs lint leaks snapshot check

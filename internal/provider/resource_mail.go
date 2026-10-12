@@ -4,12 +4,10 @@ import (
 	"context"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
-	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
@@ -105,10 +103,7 @@ func (r *mailUserResource) Create(ctx context.Context, req resource.CreateReques
 	// In state before the wait, so a wait that fails does not leave an orphan,
 	// and with the password, which no later read can supply.
 	m.set(created)
-	m.DefaultPassword = types.StringNull()
-	if created.DefaultPassword != "" {
-		m.DefaultPassword = types.StringValue(created.DefaultPassword)
-	}
+	m.DefaultPassword = stringOrNull(created.DefaultPassword)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 
 	ready, err := boxes.WaitReady(ctx, created.ID)
@@ -190,15 +185,6 @@ func (r *addressResource) Metadata(_ context.Context, req resource.MetadataReque
 }
 
 func (r *addressResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
-	list := func(description string) schema.SetAttribute {
-		return schema.SetAttribute{
-			MarkdownDescription: description,
-			ElementType:         types.StringType,
-			Optional:            true,
-			Computed:            true,
-			Default:             setdefault.StaticValue(types.SetValueMust(types.StringType, []attr.Value{})),
-		}
-	}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "A mail address. Mail sent to it is delivered to mailboxes, forwarded to other " +
 			"addresses, or both. The API accepts an address with neither, which accepts mail and keeps none of it.",
@@ -214,38 +200,28 @@ func (r *addressResource) Schema(ctx context.Context, _ resource.SchemaRequest, 
 				Required:      true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
-			"mailuser_ids": list("UUIDs of the mailboxes the mail is delivered to. Defaults to none."),
-			"forwards":     list("Addresses the mail is sent on to. Defaults to none."),
+			"mailuser_ids": idSetAttribute("UUIDs of the mailboxes the mail is delivered to. Defaults to none."),
+			"forwards":     idSetAttribute("Addresses the mail is sent on to. Defaults to none."),
 			"timeouts":     timeouts.Attributes(ctx, timeouts.Opts{Create: true, Update: true, Delete: true}),
 		},
 	}
 }
 
 func (m *addressModel) set(ctx context.Context, a *client.Address) diag.Diagnostics {
-	var diags, d diag.Diagnostics
+	var diags diag.Diagnostics
 	m.ID = types.StringValue(a.ID)
 	m.Source = types.StringValue(a.Source)
-	m.MailUserIDs, d = types.SetValueFrom(ctx, types.StringType, a.Destinations)
-	diags.Append(d...)
-	m.Forwards, d = types.SetValueFrom(ctx, types.StringType, a.Forwards)
-	diags.Append(d...)
+	m.MailUserIDs = stringSet(ctx, a.Destinations, &diags)
+	m.Forwards = stringSet(ctx, a.Forwards, &diags)
 	return diags
-}
-
-// lists reads the two sets out of the model. Neither is ever nil: the API
-// requires forwards, and an update replaces both.
-func (m *addressModel) lists(ctx context.Context) (boxes, forwards []string, diags diag.Diagnostics) {
-	boxes, forwards = []string{}, []string{}
-	diags.Append(m.MailUserIDs.ElementsAs(ctx, &boxes, false)...)
-	diags.Append(m.Forwards.ElementsAs(ctx, &forwards, false)...)
-	return boxes, forwards, diags
 }
 
 func (r *addressResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var m addressModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
-	boxes, forwards, diags := m.lists(ctx)
-	resp.Diagnostics.Append(diags...)
+	// Neither list is ever nil: the API requires forwards, and an update replaces both.
+	boxes := stringsOf(ctx, m.MailUserIDs, &resp.Diagnostics)
+	forwards := stringsOf(ctx, m.Forwards, &resp.Diagnostics)
 	ctx, cancel := withTimeout(ctx, m.Timeouts.Create, &resp.Diagnostics)
 	defer cancel()
 	if resp.Diagnostics.HasError() {
@@ -288,8 +264,9 @@ func (r *addressResource) Read(ctx context.Context, req resource.ReadRequest, re
 func (r *addressResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var m addressModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
-	boxes, forwards, diags := m.lists(ctx)
-	resp.Diagnostics.Append(diags...)
+	// Neither list is ever nil: the API requires forwards, and an update replaces both.
+	boxes := stringsOf(ctx, m.MailUserIDs, &resp.Diagnostics)
+	forwards := stringsOf(ctx, m.Forwards, &resp.Diagnostics)
 	ctx, cancel := withTimeout(ctx, m.Timeouts.Update, &resp.Diagnostics)
 	defer cancel()
 	if resp.Diagnostics.HasError() {

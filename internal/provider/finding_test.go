@@ -80,12 +80,6 @@ func answer(err error) string {
 	return "error: " + err.Error()
 }
 
-// deleter is the part of a kind a probe needs to watch a delete.
-type deleter interface {
-	Delete(context.Context, string) error
-	WaitDeleted(context.Context, string) error
-}
-
 // later deletes an object when the test ends. Cleanups run last in, first out,
 // so a child made after its parent goes first.
 func later[T any](p *probe, k interface {
@@ -645,8 +639,8 @@ func TestFindingCert(t *testing.T) {
 	later(p, p.c.Certs(), cert.ID)
 	read, err := p.c.Certs().Read(p.ctx, cert.ID)
 	p.must(err)
-	p.find("certificate as read: state=%v ready=%v listed_domains=%d letsencrypt=%v exp_date set=%v sha256 set=%v intermediates null=%v",
-		read.State != nil, read.Ready != nil, len(read.ListedDomains), read.LetsEncrypt, read.ExpDate != "", read.SHA256 != "", read.Intermediates == nil)
+	p.find("certificate as read: exp_date set=%v sha256 set=%v intermediates null=%v; the answer to the create has a state: %v",
+		read.ExpDate != "", read.SHA256 != "", read.Intermediates == nil, strings.Contains(p.answered, `"state"`))
 
 	_, err = p.c.Certs().Create(p.ctx, client.CertCreate{Name: accName(), Cert: certPEM, Key: "not a key"})
 	p.find("certificate with a key that is no key: %s", answer(err))

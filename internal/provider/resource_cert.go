@@ -5,10 +5,12 @@ import (
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/vlazic/terraform-provider-opalstack/internal/client"
@@ -56,6 +58,8 @@ func (r *certResource) Schema(ctx context.Context, _ resource.SchemaRequest, res
 			"intermediates": schema.StringAttribute{
 				MarkdownDescription: "The intermediate certificates, PEM encoded, if the certificate needs any.",
 				Optional:            true,
+				// The API reports none as null: an empty text would not survive the round trip.
+				Validators: []validator.String{stringvalidator.LengthAtLeast(1)},
 			},
 			"key": schema.StringAttribute{
 				MarkdownDescription: "The private key, PEM encoded. It is stored in the Terraform state. The provider " +
@@ -79,7 +83,7 @@ func (m *certModel) set(c *client.Cert) {
 	if strings.TrimSpace(m.Cert.ValueString()) != strings.TrimSpace(c.Cert) {
 		m.Cert = types.StringValue(c.Cert)
 	}
-	switch got := strings.TrimSpace(deref(c.Intermediates)); {
+	switch got := strings.TrimSpace(types.StringPointerValue(c.Intermediates).ValueString()); {
 	case got == "":
 		m.Intermediates = types.StringNull()
 	case strings.TrimSpace(m.Intermediates.ValueString()) != got:
@@ -87,13 +91,6 @@ func (m *certModel) set(c *client.Cert) {
 	}
 	m.ExpDate = types.StringValue(c.ExpDate)
 	m.SHA256 = types.StringValue(c.SHA256)
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }
 
 // A certificate has no pending state: the API answers with the finished object.

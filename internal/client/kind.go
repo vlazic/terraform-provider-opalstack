@@ -126,7 +126,7 @@ func (k Kind[T, C, U]) WaitReady(ctx context.Context, id string) (*T, error) {
 			return false, "", err
 		}
 		st := (*obj).status()
-		if strings.HasSuffix(st.State, "_FAILED") {
+		if st.Failed() {
 			return false, st.State, fmt.Errorf("%w: %s %s is in state %s", ErrFailed, k.name, id, st.State)
 		}
 		return st.Ready, st.State, nil
@@ -143,28 +143,30 @@ func (k Kind[T, C, U]) WaitReady(ctx context.Context, id string) (*T, error) {
 //
 // The API can lose a delete. Sent while the create of an app is still pending,
 // it is accepted and reported as PENDING_DELETE, and then the create finishes
-// and the app is READY. So whenever a poll finds the object in any state but
-// PENDING_DELETE, the delete is sent again.
+// and the app is READY. So when a poll finds the object settled again, in a
+// state that is not pending, the delete is sent once more. That cannot repeat
+// without end: a settled object that is sent a delete becomes PENDING_DELETE.
 func (k Kind[T, C, U]) WaitDeleted(ctx context.Context, id string) error {
 	return k.c.poll(ctx, k.name+" "+id+" to be deleted", func() (bool, string, error) {
 		obj, err := k.Read(ctx, id)
-		if err == nil {
-			st := (*obj).status()
-			if st.State == statePendingDelete {
-				return false, st.State, nil
-			}
-			// A failure here is left to the next poll, which reads the object
-			// again: it may just have gone.
-			note := "delete sent again"
-			if resendErr := k.Delete(ctx, id); resendErr != nil {
-				note = "sending the delete again failed: " + resendErr.Error()
-			}
-			return false, st.State + ", " + note, nil
-		}
 		if errors.Is(err, ErrNotFound) {
 			return true, "", nil
 		}
-		return false, "", err
+		if err != nil {
+			return false, "", err
+		}
+		st := (*obj).status()
+		if st.pending() {
+			return false, st.State, nil
+		}
+		err = k.Delete(ctx, id)
+		if errors.Is(err, ErrNotFound) {
+			return true, "", nil // it went between the read and the resend
+		}
+		if err != nil {
+			return false, "", fmt.Errorf("the delete was lost (the object is %s again) and could not be sent again: %w", st.State, err)
+		}
+		return false, st.State + ", delete sent again", nil
 	})
 }
 
@@ -200,6 +202,10 @@ func (k Kind[T, C, U]) postOne(ctx context.Context, verb string, req any) (*T, e
 // ErrNotFound, even when a lookup failed that way: the object the caller asked
 // about may well exist, and "not found" would let a resource drop it from state.
 func (k Kind[T, C, U]) guard(ctx context.Context, verb string, req any) error {
+	// Nothing is looked up for a write that will not be sent.
+	if k.c.cfg.ReadOnly {
+		return fmt.Errorf("%w: %s %s was not sent", ErrReadOnly, k.name, verb)
+	}
 	prefix := k.c.cfg.SafetyPrefix
 	if prefix == "" {
 		return nil

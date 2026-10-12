@@ -42,7 +42,7 @@ var defaults = map[string]obj{
 	"app":       {"port": nil, "installer_url": nil},
 	"dnsrecord": {"priority": 10, "ttl": 3600},
 	"site":      {"ip4": nil, "ip6": nil, "cert": nil, "primary_domain": nil, "redirect": false, "generate_le": false, "disabled": false},
-	"cert":      {"intermediates": nil, "exp_date": "2030-01-01T00:00:00Z", "listed_domains": []any{}, "is_opalstack_letsencrypt": false},
+	"cert":      {"intermediates": nil, "exp_date": "2030-01-01T00:00:00Z"},
 	"mariauser": {"external": false},
 	"psqluser":  {"external": false},
 	"mariadb":   {"charset": "utf8", "dbusers_readwrite": []any{}, "dbusers_readonly": []any{}},

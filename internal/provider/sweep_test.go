@@ -34,8 +34,6 @@ func TestSweep(t *testing.T) {
 		t.Fatal("OPALSTACK_TEST_DOMAIN_BASE must be set to sweep")
 	}
 
-	// A kind the token cannot list is skipped: the token is widened one group
-	// of kinds at a time, and the others answer 403.
 	dbName := func(d client.DB) (string, string) { return d.Name, d.ID }
 	dbUserName := func(u client.DBUser) (string, string) { return u.Name, u.ID }
 	// An address before the mailbox and the domain it needs. Only addresses on
@@ -65,36 +63,37 @@ func TestSweep(t *testing.T) {
 	sweep(ctx, t, "shell user", c.OSUsers(), func(u client.OSUser) (string, string) { return u.Name, u.ID })
 }
 
+// sweep deletes the leftovers of one kind, as a subtest of its own. A kind the
+// token cannot list shows as skipped, so a narrowed token never passes for clean.
 func sweep[T any, K interface {
+	deleter
 	List(context.Context) ([]T, error)
-	Delete(context.Context, string) error
-	WaitDeleted(context.Context, string) error
 }](ctx context.Context, t *testing.T, what string, k K, nameAndID func(T) (string, string)) {
 	t.Helper()
-	all, err := k.List(ctx)
-	if errors.Is(err, client.ErrForbidden) {
-		t.Logf("FINDING sweep: the token cannot list the %ss, skipped", what)
-		return
-	}
-	if err != nil {
-		t.Errorf("cannot list the %ss: %v", what, err)
-		return
-	}
-	swept := 0
-	for _, o := range all {
-		name, id := nameAndID(o)
-		if !sweepable.MatchString(name) {
-			continue
+	t.Run(what, func(t *testing.T) {
+		all, err := k.List(ctx)
+		if errors.Is(err, client.ErrForbidden) {
+			t.Skipf("the token cannot list the %s", plural(what))
 		}
-		if err := k.Delete(ctx, id); err != nil {
-			t.Errorf("cannot delete a leftover %s: %v", what, err)
-			continue
+		if err != nil {
+			t.Fatalf("cannot list the %s: %v", plural(what), err)
 		}
-		if err := k.WaitDeleted(ctx, id); err != nil {
-			t.Errorf("a leftover %s was not deleted in time: %v", what, err)
-			continue
+		swept := 0
+		for _, o := range all {
+			name, id := nameAndID(o)
+			if !sweepable.MatchString(name) {
+				continue
+			}
+			if err := k.Delete(ctx, id); err != nil {
+				t.Errorf("cannot delete a leftover %s: %v", what, err)
+				continue
+			}
+			if err := k.WaitDeleted(ctx, id); err != nil {
+				t.Errorf("a leftover %s was not deleted in time: %v", what, err)
+				continue
+			}
+			swept++
 		}
-		swept++
-	}
-	t.Logf("FINDING sweep: %d leftover %ss deleted", swept, what)
+		t.Logf("FINDING sweep: %d leftover %s deleted", swept, plural(what))
+	})
 }

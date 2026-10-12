@@ -267,14 +267,7 @@ func accLogApp(t *testing.T, label string) resource.TestCheckFunc {
 		if err != nil {
 			return err
 		}
-		for key, value := range app.JSON {
-			if client.IsSecretKey(key) {
-				app.JSON[key] = "REDACTED"
-			} else if s, ok := value.(string); ok && len(s) > 40 {
-				app.JSON[key] = s[:40] + "..."
-			}
-		}
-		t.Logf("FINDING %s: type=%s port=%v installer_url=%v json=%#v", label, app.Type, app.Port != nil, app.InstallerURL != nil, app.JSON)
+		t.Logf("FINDING %s: type=%s port=%v installer_url=%v json=%s", label, app.Type, app.Port != nil, app.InstallerURL != nil, settings(app.JSON))
 		return nil
 	}
 }
@@ -473,48 +466,49 @@ resource "opalstack_site" "s" {
 }
 
 func TestAccMaria(t *testing.T) {
-	accDatabases(t, "maria", "utf8mb4", (*client.Client).MariaUsers, (*client.Client).MariaDBs)
+	accDatabases(t, maria, "utf8mb4")
 }
 
 func TestAccPsql(t *testing.T) {
-	accDatabases(t, "psql", "latin1", (*client.Client).PsqlUsers, (*client.Client).PsqlDBs)
+	accDatabases(t, psql, "latin1")
 }
 
 // accDatabases runs one engine through users, a database and the access
 // between them. The databases go on the server the sandbox shell user lives on.
-func accDatabases(t *testing.T, engine, charset string, users func(*client.Client) client.DBUserKind, dbs func(*client.Client) client.DBKind) {
+func accDatabases(t *testing.T, engine dbEngine, charset string) {
 	sandbox := accEnv(t, "OPALSTACK_TEST_OSUSER")
 	accEnv(t, tokenEnvVar)
 	userName, readerName, dbName, secondDB := accName(), accName(), accName(), accName()
-	user, db := "opalstack_"+engine+"user.u", "opalstack_"+engine+"db.d"
+	userType, dbType := "opalstack"+engine.userType, "opalstack"+engine.dbType
+	user, db := userType+".u", dbType+".d"
 	config := func(userExtra, db, dbExtra string) string {
 		return accProvider + fmt.Sprintf(`
 data "opalstack_osuser" "sandbox" { name = %[2]q }
-resource "opalstack_%[1]suser" "u" {
+resource "%[1]s" "u" {
   name      = %[3]q
   server_id = data.opalstack_osuser.sandbox.server_id
   %[4]s
 }
-resource "opalstack_%[1]suser" "reader" {
+resource "%[1]s" "reader" {
   name      = %[5]q
   server_id = data.opalstack_osuser.sandbox.server_id
 }
-resource "opalstack_%[1]sdb" "d" {
+resource "%[8]s" "d" {
   name      = %[6]q
   server_id = data.opalstack_osuser.sandbox.server_id
   %[7]s
 }
-`, engine, sandbox, userName, userExtra, readerName, db, dbExtra)
+`, userType, sandbox, userName, userExtra, readerName, db, dbExtra, dbType)
 	}
-	access := "user_ids = [opalstack_" + engine + "user.u.id]\n  readonly_user_ids = [opalstack_" + engine + "user.reader.id]"
+	access := "user_ids = [" + userType + ".u.id]\n  readonly_user_ids = [" + userType + ".reader.id]"
 	password := `password = "` + accName() + `-Aa1"`
 	noPassword := []string{"default_password", "password"}
 
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: accFactories,
 		CheckDestroy: resource.ComposeAggregateTestCheckFunc(
-			accNoneLeft(t, "database", func(c *client.Client) client.ReadKind[client.DB] { return dbs(c).ReadKind }, func(d client.DB) string { return d.Name }),
-			accNoneLeft(t, "database user", func(c *client.Client) client.ReadKind[client.DBUser] { return users(c).ReadKind }, func(u client.DBUser) string { return u.Name }),
+			accNoneLeft(t, "database", func(c *client.Client) client.ReadKind[client.DB] { return engine.dbs(c).ReadKind }, func(d client.DB) string { return d.Name }),
+			accNoneLeft(t, "database user", func(c *client.Client) client.ReadKind[client.DBUser] { return engine.users(c).ReadKind }, func(u client.DBUser) string { return u.Name }),
 		),
 		Steps: []resource.TestStep{
 			{

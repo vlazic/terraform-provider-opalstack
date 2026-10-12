@@ -3,9 +3,15 @@ package client
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
-const statePendingDelete = "PENDING_DELETE"
+// Failed reports a state the API does not leave by itself, such as
+// INSTALL_FAILED for an app whose installer did not succeed.
+func (s Status) Failed() bool { return strings.HasSuffix(s.State, "_FAILED") }
+
+// pending reports that the API is still working on the object.
+func (s Status) pending() bool { return strings.HasPrefix(s.State, "PENDING_") }
 
 // Status is the pair every managed object reports. The response types embed it.
 type Status struct {
@@ -22,9 +28,9 @@ type statused interface{ status() Status }
 // answer already said the object was pending. The caller bounds the wait with
 // the context deadline.
 //
-// The API's state enum has no failure value, so a create that never completes
-// can only show up here as a timeout. The error therefore names the last state
-// that check reported.
+// A create that neither completes nor reaches a failed state can only show up
+// here as a timeout. The error therefore names the last state that check
+// reported.
 func (c *Client) poll(ctx context.Context, what string, check func() (done bool, state string, err error)) error {
 	last := "unknown"
 	for delay := c.pollMin; ; delay = min(delay*2, c.pollMax) {

@@ -94,10 +94,7 @@ func (r *osuserResource) Create(ctx context.Context, req resource.CreateRequest,
 	// In state before the wait, so a wait that fails does not leave an orphan,
 	// and with the password, which no later read can supply.
 	m.set(created)
-	m.DefaultPassword = types.StringNull()
-	if created.DefaultPassword != "" {
-		m.DefaultPassword = types.StringValue(created.DefaultPassword)
-	}
+	m.DefaultPassword = stringOrNull(created.DefaultPassword)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 
 	ready, err := users.WaitReady(ctx, created.ID)

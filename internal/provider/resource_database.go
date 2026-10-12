@@ -4,13 +4,11 @@ import (
 	"context"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
-	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
@@ -129,10 +127,7 @@ func (r *dbUserResource) Create(ctx context.Context, req resource.CreateRequest,
 	// In state before the wait, so a wait that fails does not leave an orphan,
 	// and with the password, which no later read can supply.
 	m.set(created)
-	m.DefaultPassword = types.StringNull()
-	if created.DefaultPassword != "" {
-		m.DefaultPassword = types.StringValue(created.DefaultPassword)
-	}
+	m.DefaultPassword = stringOrNull(created.DefaultPassword)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 
 	ready, err := users.WaitReady(ctx, created.ID)
@@ -229,15 +224,6 @@ func (r *dbResource) Metadata(_ context.Context, req resource.MetadataRequest, r
 func (r *dbResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	keep := []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
 	replace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
-	users := func(description string) schema.SetAttribute {
-		return schema.SetAttribute{
-			MarkdownDescription: description,
-			ElementType:         types.StringType,
-			Optional:            true,
-			Computed:            true,
-			Default:             setdefault.StaticValue(types.SetValueMust(types.StringType, []attr.Value{})),
-		}
-	}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "A " + r.engine.name + " database. Only the lists of users change in place. " +
 			"Deleting the database deletes its data.",
@@ -252,40 +238,29 @@ func (r *dbResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp 
 				Computed:      true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown(), stringplanmodifier.RequiresReplace()},
 			},
-			"user_ids":          users("UUIDs of the " + r.engine.name + " users that may read and write. Defaults to none."),
-			"readonly_user_ids": users("UUIDs of the " + r.engine.name + " users that may only read. Defaults to none."),
+			"user_ids":          idSetAttribute("UUIDs of the " + r.engine.name + " users that may read and write. Defaults to none."),
+			"readonly_user_ids": idSetAttribute("UUIDs of the " + r.engine.name + " users that may only read. Defaults to none."),
 			"timeouts":          timeouts.Attributes(ctx, timeouts.Opts{Create: true, Update: true, Delete: true}),
 		},
 	}
 }
 
 func (m *dbModel) set(ctx context.Context, db *client.DB) diag.Diagnostics {
-	var diags, d diag.Diagnostics
+	var diags diag.Diagnostics
 	m.ID = types.StringValue(db.ID)
 	m.Name = types.StringValue(db.Name)
 	m.ServerID = types.StringValue(db.Server)
 	m.Charset = types.StringValue(db.Charset)
-	m.UserIDs, d = types.SetValueFrom(ctx, types.StringType, db.Users)
-	diags.Append(d...)
-	m.ReadOnlyUserIDs, d = types.SetValueFrom(ctx, types.StringType, db.ReadOnlyUsers)
-	diags.Append(d...)
+	m.UserIDs = stringSet(ctx, db.Users, &diags)
+	m.ReadOnlyUserIDs = stringSet(ctx, db.ReadOnlyUsers, &diags)
 	return diags
-}
-
-// users reads the two sets out of the model. Both are never nil, so an update
-// sends an empty list where the configuration has none.
-func (m *dbModel) users(ctx context.Context) (readWrite, readOnly []string, diags diag.Diagnostics) {
-	readWrite, readOnly = []string{}, []string{}
-	diags.Append(m.UserIDs.ElementsAs(ctx, &readWrite, false)...)
-	diags.Append(m.ReadOnlyUserIDs.ElementsAs(ctx, &readOnly, false)...)
-	return readWrite, readOnly, diags
 }
 
 func (r *dbResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var m dbModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
-	readWrite, readOnly, diags := m.users(ctx)
-	resp.Diagnostics.Append(diags...)
+	readWrite := stringsOf(ctx, m.UserIDs, &resp.Diagnostics)
+	readOnly := stringsOf(ctx, m.ReadOnlyUserIDs, &resp.Diagnostics)
 	ctx, cancel := withTimeout(ctx, m.Timeouts.Create, &resp.Diagnostics)
 	defer cancel()
 	if resp.Diagnostics.HasError() {
@@ -331,8 +306,8 @@ func (r *dbResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 func (r *dbResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var m dbModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
-	readWrite, readOnly, diags := m.users(ctx)
-	resp.Diagnostics.Append(diags...)
+	readWrite := stringsOf(ctx, m.UserIDs, &resp.Diagnostics)
+	readOnly := stringsOf(ctx, m.ReadOnlyUserIDs, &resp.Diagnostics)
 	ctx, cancel := withTimeout(ctx, m.Timeouts.Update, &resp.Diagnostics)
 	defer cancel()
 	if resp.Diagnostics.HasError() {
