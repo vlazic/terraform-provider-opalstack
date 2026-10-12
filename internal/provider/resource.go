@@ -90,3 +90,20 @@ func importByIDOrName[T any](ctx context.Context, k client.ReadKind[T], what str
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
 }
+
+// knownBool and knownInt64 return nil unless the value is set. The framework's
+// own pointer getters return a pointer to the zero value for an unknown one,
+// which would send false or 0 where the API is meant to choose.
+func knownBool(v types.Bool) *bool {
+	if v.IsNull() || v.IsUnknown() {
+		return nil
+	}
+	return v.ValueBoolPointer()
+}
+
+func knownInt64(v types.Int64) *int64 {
+	if v.IsNull() || v.IsUnknown() {
+		return nil
+	}
+	return v.ValueInt64Pointer()
+}

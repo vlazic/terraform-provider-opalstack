@@ -101,7 +101,7 @@ func (r *domainResource) Create(ctx context.Context, req resource.CreateRequest,
 	domains := r.client.Domains()
 	created, err := domains.Create(ctx, client.DomainCreate{
 		Name:             m.Name.ValueString(),
-		DelegatedDNSZone: m.DelegatedDNSZone.ValueBoolPointer(),
+		DelegatedDNSZone: knownBool(m.DelegatedDNSZone),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot create the domain", err.Error())
@@ -149,7 +149,7 @@ func (r *domainResource) Update(ctx context.Context, req resource.UpdateRequest,
 	domains := r.client.Domains()
 	if _, err := domains.Update(ctx, client.DomainUpdate{
 		ID:               m.ID.ValueString(),
-		DelegatedDNSZone: m.DelegatedDNSZone.ValueBoolPointer(),
+		DelegatedDNSZone: knownBool(m.DelegatedDNSZone),
 	}); err != nil {
 		resp.Diagnostics.AddError("Cannot update the domain", err.Error())
 		return

@@ -27,8 +27,8 @@ func TestDomainResource(t *testing.T) {
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: factories,
 		CheckDestroy: func(*terraform.State) error {
-			if left := f.named("domain", "tfacc-"); len(left) != 0 {
-				return fmt.Errorf("%d test domains were left behind", len(left))
+			if n := f.count("domain"); n != 0 {
+				return fmt.Errorf("%d domains were left behind", n)
 			}
 			return nil
 		},
@@ -72,12 +72,8 @@ func TestDomainResource(t *testing.T) {
 				Check: resource.TestCheckResourceAttr(addr, "name", "tfacc-b.example.com"),
 			},
 			{ // deleted outside Terraform: the next plan recreates it
-				PreConfig: func() {
-					for _, id := range f.named("domain", "tfacc-b.") {
-						f.remove(id)
-					}
-				},
-				Config: block + domainConfig("tfacc-b.example.com", true),
+				PreConfig: func() { f.removeAll("domain", "tfacc-b.") },
+				Config:    block + domainConfig("tfacc-b.example.com", true),
 				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
 					plancheck.ExpectResourceAction(addr, plancheck.ResourceActionCreate),
 				}},

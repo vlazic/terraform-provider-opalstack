@@ -35,7 +35,8 @@ type fakeAPI struct {
 
 // defaults are the fields the API fills in on create.
 var defaults = map[string]obj{
-	"domain": {"delegated_dns_zone": false, "is_valid_hostname": true, "dkim_record": nil, "dkim_pubkey": nil, "dkim_privkey": "PRIVATE"},
+	"dnsrecord": {"priority": 10, "ttl": 3600},
+	"domain":    {"delegated_dns_zone": false, "is_valid_hostname": true, "dkim_record": nil, "dkim_pubkey": nil, "dkim_privkey": "PRIVATE"},
 }
 
 // seed adds an object as if it had always been there.
@@ -48,24 +49,35 @@ func (f *fakeAPI) seed(kind string, o obj) {
 	f.objects[o["id"].(string)] = stored
 }
 
-// remove deletes an object behind the provider's back.
-func (f *fakeAPI) remove(id string) {
+// removeAll deletes the objects of a kind whose name has one of the prefixes,
+// or all of them when none is given, behind the provider's back.
+func (f *fakeAPI) removeAll(kind string, prefixes ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	delete(f.objects, id)
-}
-
-// named returns the ids of the objects of a kind whose name has the prefix.
-func (f *fakeAPI) named(kind, prefix string) []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var ids []string
 	for id, o := range f.objects {
-		if name, _ := o["name"].(string); o["_kind"] == kind && strings.HasPrefix(name, prefix) {
-			ids = append(ids, id)
+		if f.matches(o, kind, prefixes) {
+			delete(f.objects, id)
 		}
 	}
-	return ids
+}
+
+// count is how many objects removeAll would delete.
+func (f *fakeAPI) count(kind string, prefixes ...string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, o := range f.objects {
+		if f.matches(o, kind, prefixes) {
+			n++
+		}
+	}
+	return n
+}
+
+func (f *fakeAPI) matches(o obj, kind string, prefixes []string) bool {
+	name, _ := o["name"].(string)
+	return o["_kind"] == kind && (len(prefixes) == 0 ||
+		slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(name, p) }))
 }
 
 func (f *fakeAPI) wrote(kindVerb string) int {
