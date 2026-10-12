@@ -97,6 +97,14 @@ func New(cfg Config) (*Client, error) {
 	}, nil
 }
 
+// SetPacing replaces the spacing between requests and the first delay between
+// the polls of a wait. The defaults suit the live API; this is for a client
+// that talks to a fake one.
+func (c *Client) SetPacing(betweenRequests, betweenPolls time.Duration) {
+	c.minInterval, c.pollMin = betweenRequests, betweenPolls
+	c.pollMax = max(c.pollMax, betweenPolls)
+}
+
 // get performs a GET and decodes the response into out.
 func (c *Client) get(ctx context.Context, path string, out any) error {
 	return c.do(ctx, http.MethodGet, path, nil, out)

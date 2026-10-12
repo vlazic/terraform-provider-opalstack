@@ -1,18 +1,9 @@
 package provider
 
 import (
-	"cmp"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"os/exec"
 	"regexp"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework/provider"
-	"github.com/hashicorp/terraform-plugin-framework/providerserver"
-	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
@@ -25,63 +16,25 @@ const (
 	domainID = "40000000-0000-0000-0000-000000000001"
 	appID    = "50000000-0000-0000-0000-000000000001"
 	app2ID   = "50000000-0000-0000-0000-000000000002"
+	app3ID   = "50000000-0000-0000-0000-000000000003"
 )
 
-// fakeAccount is the answer to each GET path of a small made-up account.
-var fakeAccount = map[string]string{
-	"/server/list/": `{"web_servers":[{"id":"` + serverID + `","hostname":"opal1.opalstack.com","type":"web"}],
-		"imap_servers":[],"smtp_servers":[]}`,
-	"/server/read/" + serverID: `{"id":"` + serverID + `","hostname":"opal1.opalstack.com","type":"web"}`,
-	"/ip/list/": `[{"id":"` + ipID + `","ip":"192.0.2.10","server":"` + serverID + `","type":"4","primary":true},
-		{"id":"` + ip6ID + `","ip":"2001:db8::10","server":"` + serverID + `","type":"6","primary":true}]`,
-	"/osuser/list/":            `[{"id":"` + osuserID + `","name":"sandbox","server":"` + serverID + `","state":"READY","ready":true}]`,
-	"/osuser/read/" + osuserID: `{"id":"` + osuserID + `","name":"sandbox","server":"` + serverID + `","state":"READY","ready":true}`,
-	"/domain/list/": `[{"id":"` + domainID + `","name":"example.com","delegated_dns_zone":false,"is_valid_hostname":true,
-		"dkim_record":null,"dkim_pubkey":null,"dkim_privkey":"PRIVATE","state":"READY","ready":true}]`,
-	"/app/list/": `[{"id":"` + appID + `","name":"site","osuser":"` + osuserID + `","osuser_name":"sandbox","server":"` + serverID + `",
-		"type":"STA","port":null,"installer_url":null,"json":{"php_version":"83"},"state":"READY","ready":true},
-		{"id":"` + app2ID + `","name":"twice","osuser":"` + osuserID + `","type":"STA","json":{}},
-		{"id":"` + appID + `","name":"twice","osuser":"` + serverID + `","type":"STA","json":{}}]`,
-}
-
-// fakeProvider serves fakeAccount over TLS and returns the provider factories
-// and a provider block that points at it. The test is skipped without a
-// terraform binary, so the offline unit tests never try to download one.
-func fakeProvider(t *testing.T) (map[string]func() (tfprotov6.ProviderServer, error), string) {
-	t.Helper()
-	// A version-manager shim is on PATH but answers only inside a directory that
-	// pins a version, and the test framework runs terraform in a temporary one.
-	bin := cmp.Or(os.Getenv("TF_ACC_TERRAFORM_PATH"), "terraform")
-	probe := exec.Command(bin, "version")
-	probe.Dir = t.TempDir()
-	if err := probe.Run(); err != nil {
-		t.Skipf("no usable terraform binary (%s): set TF_ACC_TERRAFORM_PATH, as make test does", bin)
-	}
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, ok := fakeAccount[r.URL.Path[len("/api/v1"):]]
-		if !ok || r.Method != http.MethodGet {
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"id":["Not found."]}`))
-			return
-		}
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(srv.Close)
-
-	factories := map[string]func() (tfprotov6.ProviderServer, error){
-		"opalstack": providerserver.NewProtocol6WithError(provider.Provider(&opalstackProvider{version: "test", httpClient: srv.Client()})),
-	}
-	block := fmt.Sprintf(`
-provider "opalstack" {
-  token    = "1111111111111111111111111111111111111111"
-  base_url = %q
-}
-`, srv.URL+"/api/v1")
-	return factories, block
+// seedAccount fills the fake with a small made-up account.
+func seedAccount(f *fakeAPI) {
+	f.seed("server", obj{"id": serverID, "hostname": "opal1.opalstack.com", "type": "web"})
+	f.seed("ip", obj{"id": ipID, "ip": "192.0.2.10", "server": serverID, "type": "4", "primary": true})
+	f.seed("ip", obj{"id": ip6ID, "ip": "2001:db8::10", "server": serverID, "type": "6", "primary": true})
+	f.seed("osuser", obj{"id": osuserID, "name": "sandbox", "server": serverID})
+	f.seed("domain", obj{"id": domainID, "name": "example.com"})
+	f.seed("app", obj{"id": appID, "name": "site", "osuser": osuserID, "osuser_name": "sandbox", "server": serverID,
+		"type": "STA", "port": nil, "installer_url": nil, "json": obj{"php_version": "83"}})
+	f.seed("app", obj{"id": app2ID, "name": "twice", "osuser": osuserID, "type": "STA", "json": obj{}})
+	f.seed("app", obj{"id": app3ID, "name": "twice", "osuser": serverID, "type": "STA", "json": obj{}})
 }
 
 func TestDataSources(t *testing.T) {
-	factories, block := fakeProvider(t)
+	f, factories, block := fakeProvider(t)
+	seedAccount(f)
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: factories,
 		Steps: []resource.TestStep{{
@@ -125,7 +78,8 @@ data "opalstack_app" "narrowed" {
 }
 
 func TestDataSourceLookupErrors(t *testing.T) {
-	factories, block := fakeProvider(t)
+	f, factories, block := fakeProvider(t)
+	seedAccount(f)
 	for name, tc := range map[string]struct{ config, want string }{
 		"no match":        {`data "opalstack_domain" "d" { name = "missing.example.com" }`, `No domain matches`},
 		"several matches": {`data "opalstack_app" "a" { name = "twice" }`, `More than one app matches`},

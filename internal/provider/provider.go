@@ -153,12 +153,15 @@ func (p *opalstackProvider) Configure(ctx context.Context, req provider.Configur
 		resp.Diagnostics.AddError("Cannot create the Opalstack client", err.Error())
 		return
 	}
+	if p.httpClient != nil {
+		c.SetPacing(0, time.Millisecond) // a fake API needs no pacing
+	}
 	resp.ResourceData = c
 	resp.DataSourceData = c
 }
 
 func (p *opalstackProvider) Resources(context.Context) []func() resource.Resource {
-	return nil
+	return []func() resource.Resource{newDomainResource}
 }
 
 func (p *opalstackProvider) DataSources(context.Context) []func() datasource.DataSource {
