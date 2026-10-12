@@ -42,7 +42,7 @@ resource "opalstack_site" "www" {
 
 ### Optional
 
-- `intermediates` (String) The intermediate certificates, PEM encoded, if the certificate needs any.
+- `intermediates` (String) The intermediate certificates, PEM encoded, if the certificate needs any. Left out, a new certificate has none and an existing one keeps what the API has, so adopting a certificate never removes its chain.
 - `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 
 ### Read-Only

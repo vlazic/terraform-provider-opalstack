@@ -57,8 +57,12 @@ func (r *certResource) Schema(ctx context.Context, _ resource.SchemaRequest, res
 			"name": schema.StringAttribute{MarkdownDescription: "Name of the certificate: letters, digits, `_` and `-`.", Required: true},
 			"cert": schema.StringAttribute{MarkdownDescription: "The certificate, PEM encoded.", Required: true},
 			"intermediates": schema.StringAttribute{
-				MarkdownDescription: "The intermediate certificates, PEM encoded, if the certificate needs any.",
-				Optional:            true,
+				MarkdownDescription: "The intermediate certificates, PEM encoded, if the certificate needs any. " +
+					"Left out, a new certificate has none and an existing one keeps what the API has, so adopting " +
+					"a certificate never removes its chain.",
+				Optional:      true,
+				Computed:      true,
+				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 				// The API reports none as null: an empty text would not survive the round trip.
 				Validators: []validator.String{stringvalidator.RegexMatches(regexp.MustCompile(`\S`), "must not be blank; leave it out instead")},
 			},

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 (2026-10-12)
+
+- `opalstack_cert`: `intermediates` left out of the configuration is now kept as the API has it.
+  Before, adopting a certificate with a configuration that did not name its chain planned to
+  remove the chain.
+
 ## 0.1.0 (2026-10-12)
 
 The first version. Private: it is not published to a registry.

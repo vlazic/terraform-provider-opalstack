@@ -68,15 +68,10 @@ func TestCertResource(t *testing.T) {
 					},
 				),
 			},
-			{ // intermediates taken away again: sent as null
+			{ // intermediates left out again: the chain stays, and nothing is sent
 				Config:           block + certConfig("tfacc-renewed", "second certificate", ""),
-				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionUpdate),
-				Check: func(*terraform.State) error {
-					if body := f.lastBody("cert/update"); !strings.Contains(body, `"intermediates":null`) {
-						return fmt.Errorf("intermediates were not cleared: %s", body)
-					}
-					return nil
-				},
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionNoop),
+				Check:            resource.TestCheckResourceAttr(addr, "intermediates", "chain"),
 			},
 		},
 	})
