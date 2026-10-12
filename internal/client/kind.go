@@ -122,6 +122,9 @@ func (k Kind[T, C, U]) WaitReady(ctx context.Context, id string) (*T, error) {
 			return false, "", err
 		}
 		st := (*obj).status()
+		if strings.HasSuffix(st.State, "_FAILED") {
+			return false, st.State, fmt.Errorf("%w: %s %s is in state %s", ErrFailed, k.name, id, st.State)
+		}
 		return st.Ready, st.State, nil
 	})
 	if err != nil {
@@ -130,18 +133,34 @@ func (k Kind[T, C, U]) WaitReady(ctx context.Context, id string) (*T, error) {
 	return obj, nil
 }
 
-// WaitDeleted polls until a read of the object answers not found, which is how
-// the official Python wrapper detects that a queued deletion has finished.
+// WaitDeleted follows a Delete: it polls until a read of the object answers
+// not found, which is how the official Python wrapper detects that a queued
+// deletion has finished.
+//
+// The API can lose a delete. Sent while the create of an app is still pending,
+// it is accepted and reported as PENDING_DELETE, and then the create finishes
+// and the app is READY. So whenever a poll finds the object in any state but
+// PENDING_DELETE, the delete is sent again.
 func (k Kind[T, C, U]) WaitDeleted(ctx context.Context, id string) error {
 	return k.c.poll(ctx, k.name+" "+id+" to be deleted", func() (bool, string, error) {
 		obj, err := k.Read(ctx, id)
+		if err == nil {
+			st := (*obj).status()
+			if st.State == statePendingDelete {
+				return false, st.State, nil
+			}
+			// A failure here is left to the next poll, which reads the object
+			// again: it may just have gone.
+			note := "delete sent again"
+			if resendErr := k.Delete(ctx, id); resendErr != nil {
+				note = "sending the delete again failed: " + resendErr.Error()
+			}
+			return false, st.State + ", " + note, nil
+		}
 		if errors.Is(err, ErrNotFound) {
 			return true, "", nil
 		}
-		if err != nil {
-			return false, "", err
-		}
-		return false, (*obj).status().State, nil
+		return false, "", err
 	})
 }
 

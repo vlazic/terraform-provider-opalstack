@@ -3,13 +3,13 @@
 page_title: "opalstack_osuser Resource - opalstack"
 subcategory: ""
 description: |-
-  A shell user. Apps belong to one and run as it. Nothing about a shell user can be changed in place, and deleting one deletes its home directory.
+  A shell user. Apps belong to one and run as it. Nothing about a shell user can be changed in place, and deleting one deletes its home directory and every app that belongs to it.
   The API chooses the password and reports it once, in default_password. This resource does not set a password of your own, and the API has no way to manage SSH keys.
 ---
 
 # opalstack_osuser (Resource)
 
-A shell user. Apps belong to one and run as it. Nothing about a shell user can be changed in place, and deleting one deletes its home directory.
+A shell user. Apps belong to one and run as it. Nothing about a shell user can be changed in place, and deleting one deletes its home directory **and every app that belongs to it**.
 
 The API chooses the password and reports it once, in `default_password`. This resource does not set a password of your own, and the API has no way to manage SSH keys.
 

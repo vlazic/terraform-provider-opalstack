@@ -3,13 +3,16 @@
 A Terraform and OpenTofu provider for [Opalstack](https://www.opalstack.com) managed hosting, built
 on terraform-plugin-framework. Opalstack is unrelated to Opal (opal.dev).
 
-**Status: private and unreleased.** Five resources and five data sources exist, are documented in
+**Status: private and unreleased.** Five resources and six data sources exist, are documented in
 [`docs/`](docs/index.md), and pass acceptance tests against a real account. [`PLAN.md`](PLAN.md)
 says what is decided and what comes next.
 
+To bring an existing account under Terraform without changing it, set `read_only = true` on the
+provider and follow [the adoption guide](docs/guides/adopting-an-account.md).
+
 | Resources | Data sources |
 |---|---|
-| `opalstack_domain`, `opalstack_dnsrecord`, `opalstack_osuser`, `opalstack_app`, `opalstack_site` | `opalstack_server`, `opalstack_ip`, `opalstack_osuser`, `opalstack_domain`, `opalstack_app` |
+| `opalstack_domain`, `opalstack_dnsrecord`, `opalstack_osuser`, `opalstack_app`, `opalstack_site` | `opalstack_server`, `opalstack_ip`, `opalstack_osuser`, `opalstack_domain`, `opalstack_app`, `opalstack_site` |
 
 - [`API_FINDINGS.md`](API_FINDINGS.md): what the API does, each fact with its source
 - [`spec/openapi.yaml`](spec/openapi.yaml): the OpenAPI schema as served by the API

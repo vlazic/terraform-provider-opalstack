@@ -22,6 +22,13 @@ var (
 	// ErrSafetyPrefix means the client refused a write because the target's name
 	// lacks the configured safety prefix. No request was sent for that write.
 	ErrSafetyPrefix = errors.New("opalstack: refused by the safety prefix")
+	// ErrFailed means the API gave up on an object: it reports a state such as
+	// INSTALL_FAILED, which an app reaches when its installer does not succeed.
+	// The object still exists and can be deleted.
+	ErrFailed = errors.New("opalstack: the object failed")
+	// ErrReadOnly means the client is configured read-only and refused to send
+	// anything but a GET.
+	ErrReadOnly = errors.New("opalstack: refused because the client is read-only")
 )
 
 const maxErrorBody = 2000

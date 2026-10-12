@@ -5,6 +5,8 @@ import (
 	"fmt"
 )
 
+const statePendingDelete = "PENDING_DELETE"
+
 // Status is the pair every managed object reports. The response types embed it.
 type Status struct {
 	State string `json:"state"`

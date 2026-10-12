@@ -30,6 +30,7 @@ provider "opalstack" {}
 ### Optional
 
 - `base_url` (String) API base URL. Defaults to `https://my.opalstack.com/api/v1`.
+- `read_only` (Boolean) When true, the provider sends nothing but reads: every create, update and delete fails before a request is made. Planning, refreshing and importing still work. Meant for adopting an existing account, until its plan shows no changes.
 - `request_timeout` (String) Limit for a single API request, as a duration such as `45s`. Defaults to `30s`. Waiting for an object to become ready is governed by each resource's `timeouts` instead.
 - `safety_osuser_id` (String) Used with `safety_prefix`: the id of the one shell user that apps may be created under although its name lacks the prefix. The user itself is still never changed or deleted.
 - `safety_prefix` (String) When set, the provider refuses to create, update or delete any object whose name does not start with this prefix, or that refers to one: the domains and apps of a site and the shell user of an app are checked too. A DNS record is judged by the name of its domain. Meant for development and testing against an account that also holds real objects.

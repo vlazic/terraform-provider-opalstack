@@ -197,6 +197,24 @@ func TestDeleteAcceptsQueuedObjectReply(t *testing.T) {
 	}
 }
 
+// The API can lose a delete that arrives while a create is pending: the
+// object comes back as READY. The wait notices and sends the delete again.
+func TestWaitDeletedResendsALostDelete(t *testing.T) {
+	f, c, _ := newFake(t)
+	f.on("GET", "/app/read/"+idA,
+		ok(`{"id":"`+idA+`","state":"PENDING_DELETE","ready":false}`),
+		ok(`{"id":"`+idA+`","state":"READY","ready":true}`),
+		ok(`{"id":"`+idA+`","state":"PENDING_DELETE","ready":false}`),
+		reply{status: 404, body: `{"id":["Not found."]}`})
+	f.on("POST", "/app/delete/", ok(`{"ok":"Queued for deletion."}`))
+	if err := c.Apps().WaitDeleted(context.Background(), idA); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count("POST", "/app/delete/"); n != 1 {
+		t.Errorf("%d deletes were sent, want exactly one resend", n)
+	}
+}
+
 func TestServerListIsAnObject(t *testing.T) {
 	f, c, _ := newFake(t)
 	f.on("GET", "/server/list/", ok(`{"web_servers":[{"id":"`+idB+`","hostname":"opal1.opalstack.com","type":"web"}],
@@ -379,6 +397,20 @@ func TestWaitReadyTimeoutNamesLastState(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "PENDING_CREATE") {
 		t.Errorf("err = %q, want it to name the last state", err)
+	}
+}
+
+func TestWaitReadyStopsOnAFailedState(t *testing.T) {
+	f, c, _ := newFake(t)
+	f.on("GET", "/app/read/"+idA,
+		ok(`{"id":"`+idA+`","state":"PENDING_INSTALL","ready":false}`),
+		ok(`{"id":"`+idA+`","state":"INSTALL_FAILED","ready":false}`))
+	_, err := c.Apps().WaitReady(context.Background(), idA)
+	if !errors.Is(err, ErrFailed) || !strings.Contains(err.Error(), "INSTALL_FAILED") {
+		t.Fatalf("err = %v, want ErrFailed naming the state", err)
+	}
+	if n := f.count("GET", ""); n != 2 {
+		t.Errorf("%d reads, want the wait to stop at the failed state", n)
 	}
 }
 
@@ -621,6 +653,29 @@ func TestSafetyPrefix(t *testing.T) {
 			t.Errorf("%d POST requests were sent", n)
 		}
 	})
+}
+
+func TestReadOnlySendsNoWrite(t *testing.T) {
+	f, c, _ := newFake(t)
+	c.cfg.ReadOnly = true
+	f.on("GET", "/domain/read/"+idA, reply{status: 200, body: `{"id":"` + idA + `","name":"example.com","state":"READY","ready":true}`})
+
+	if _, err := c.Domains().Read(context.Background(), idA); err != nil {
+		t.Fatalf("a read must still work: %v", err)
+	}
+	_, createErr := c.Domains().Create(context.Background(), DomainCreate{Name: "example.com"})
+	_, updateErr := c.Domains().Update(context.Background(), DomainUpdate{ID: idA})
+	deleteErr := c.Domains().Delete(context.Background(), idA)
+	for verb, err := range map[string]error{"create": createErr, "update": updateErr, "delete": deleteErr} {
+		if !errors.Is(err, ErrReadOnly) {
+			t.Errorf("%s: got %v, want ErrReadOnly", verb, err)
+		}
+	}
+	for _, call := range f.calls {
+		if call.method != http.MethodGet {
+			t.Errorf("%s %s reached the API", call.method, call.path)
+		}
+	}
 }
 
 func TestLogsAreRedacted(t *testing.T) {

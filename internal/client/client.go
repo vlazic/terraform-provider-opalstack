@@ -50,6 +50,10 @@ type Config struct {
 	// The user itself is still never updated or deleted.
 	SafetyOSUserID string
 
+	// ReadOnly makes the client refuse every request that is not a GET, before
+	// it is sent. Reading, planning and importing work; nothing can be changed.
+	ReadOnly bool
+
 	// RequestTimeout bounds a single HTTP round trip.
 	RequestTimeout time.Duration
 
@@ -118,6 +122,10 @@ func (c *Client) post(ctx context.Context, path string, body, out any) error {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body []byte, out any) error {
+	// Checked here, where every request passes, so no write path can miss it.
+	if c.cfg.ReadOnly && method != http.MethodGet {
+		return fmt.Errorf("%w: %s %s was not sent", ErrReadOnly, method, path)
+	}
 	for attempt := 1; ; attempt++ {
 		status, respBody, retryAfter, err := c.roundTrip(ctx, method, path, body)
 		if err == nil && status >= 200 && status < 300 {

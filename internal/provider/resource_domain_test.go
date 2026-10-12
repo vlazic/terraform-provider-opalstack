@@ -102,3 +102,44 @@ func TestDomainResourceSafetyPrefix(t *testing.T) {
 		t.Errorf("%d creates reached the API", n)
 	}
 }
+
+// With read_only the provider plans and imports, and sends no write at all.
+func TestReadOnlyProvider(t *testing.T) {
+	f, factories, block := fakeProvider(t)
+	f.seed("domain", obj{"id": domainID, "name": "example.com"})
+	block = regexp.MustCompile(`\n}\n$`).ReplaceAllString(block, "\n  read_only = true\n}\n")
+	const imported = `
+import {
+  to = opalstack_domain.d
+  id = "example.com"
+}
+resource "opalstack_domain" "d" { name = "example.com" }
+`
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{Config: block + imported, Check: resource.TestCheckResourceAttr("opalstack_domain.d", "id", domainID)},
+			{
+				Config:      block + imported + `resource "opalstack_domain" "new" { name = "new.example.com" }`,
+				ExpectError: regexp.MustCompile(`the client is\s+read-only`),
+			},
+			{
+				Config:      block + `resource "opalstack_domain" "other" { name = "other.example.com" }`,
+				ExpectError: regexp.MustCompile(`the client is\s+read-only`),
+			},
+			{ // forgotten, not destroyed: the test's own destroy could not delete it either
+				Config: block + `
+removed {
+  from = opalstack_domain.d
+  lifecycle {
+    destroy = false
+  }
+}
+`,
+			},
+		},
+	})
+	if len(f.writes) != 0 {
+		t.Errorf("writes reached the API: %v", f.writes)
+	}
+}

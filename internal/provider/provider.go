@@ -35,6 +35,7 @@ type providerModel struct {
 	BaseURL        types.String `tfsdk:"base_url"`
 	SafetyPrefix   types.String `tfsdk:"safety_prefix"`
 	SafetyOSUserID types.String `tfsdk:"safety_osuser_id"`
+	ReadOnly       types.Bool   `tfsdk:"read_only"`
 	RequestTimeout types.String `tfsdk:"request_timeout"`
 }
 
@@ -73,6 +74,12 @@ func (p *opalstackProvider) Schema(_ context.Context, _ provider.SchemaRequest, 
 			"safety_osuser_id": schema.StringAttribute{
 				MarkdownDescription: "Used with `safety_prefix`: the id of the one shell user that apps may be created " +
 					"under although its name lacks the prefix. The user itself is still never changed or deleted.",
+				Optional: true,
+			},
+			"read_only": schema.BoolAttribute{
+				MarkdownDescription: "When true, the provider sends nothing but reads: every create, update and delete " +
+					"fails before a request is made. Planning, refreshing and importing still work. " +
+					"Meant for adopting an existing account, until its plan shows no changes.",
 				Optional: true,
 			},
 			"request_timeout": schema.StringAttribute{
@@ -144,6 +151,11 @@ func (p *opalstackProvider) Configure(ctx context.Context, req provider.Configur
 		}
 		timeout = d
 	}
+	if cfg.ReadOnly.IsUnknown() {
+		// Treating it as false would make a provider meant to be read-only write.
+		resp.Diagnostics.AddAttributeError(path.Root("read_only"), "Unknown provider setting",
+			"The value of read_only is not known until apply. Set it to a value that is known at plan time.")
+	}
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -154,6 +166,7 @@ func (p *opalstackProvider) Configure(ctx context.Context, req provider.Configur
 		UserAgent:      "terraform-provider-opalstack/" + p.version,
 		SafetyPrefix:   cfg.SafetyPrefix.ValueString(),
 		SafetyOSUserID: cfg.SafetyOSUserID.ValueString(),
+		ReadOnly:       cfg.ReadOnly.ValueBool(),
 		RequestTimeout: timeout,
 		Log: func(ctx context.Context, msg string, fields map[string]any) {
 			tflog.Debug(ctx, msg, fields)
@@ -177,6 +190,6 @@ func (p *opalstackProvider) Resources(context.Context) []func() resource.Resourc
 
 func (p *opalstackProvider) DataSources(context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
-		newServerDataSource, newIPDataSource, newOSUserDataSource, newDomainDataSource, newAppDataSource,
+		newServerDataSource, newIPDataSource, newOSUserDataSource, newDomainDataSource, newAppDataSource, newSiteDataSource,
 	}
 }

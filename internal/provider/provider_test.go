@@ -25,8 +25,8 @@ func configure(t *testing.T, values map[string]tftypes.Value) *provider.Configur
 
 	objType := schemaResp.Schema.Type().TerraformType(ctx).(tftypes.Object)
 	full := map[string]tftypes.Value{}
-	for name := range objType.AttributeTypes {
-		full[name] = tftypes.NewValue(tftypes.String, nil)
+	for name, attrType := range objType.AttributeTypes {
+		full[name] = tftypes.NewValue(attrType, nil)
 	}
 	maps.Copy(full, values)
 
@@ -97,6 +97,13 @@ func TestConfigure(t *testing.T) {
 		resp := configure(t, map[string]tftypes.Value{"token": str(token), "safety_prefix": str("tfacc-"), "safety_osuser_id": str("sandbox")})
 		if !resp.Diagnostics.HasError() {
 			t.Error("expected an error")
+		}
+	})
+
+	t.Run("unknown read_only", func(t *testing.T) {
+		resp := configure(t, map[string]tftypes.Value{"token": str(token), "read_only": tftypes.NewValue(tftypes.Bool, tftypes.UnknownValue)})
+		if !resp.Diagnostics.HasError() {
+			t.Error("expected an error: an unknown read_only must not be taken as false")
 		}
 	})
 

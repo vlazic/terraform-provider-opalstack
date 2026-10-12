@@ -34,6 +34,16 @@ Sources, by short name:
 `StateEnum` is `READY`, `PENDING_CREATE`, `PENDING_UPDATE`, `PENDING_DELETE` (spec). There is **no
 failure state** in the enum. Every response object of a managed kind carries `state` and `ready`.
 
+**The live API has states the spec does not list** (`TestFinding*` probes, 2026-10-12):
+
+- `PENDING_START`: what the answer to an app create carries.
+- `PENDING_INSTALL`: an app created with an `installer_url`, while the installer has not reported.
+- `INSTALL_FAILED`: the same app when the installer never succeeds. With a URL that answers 404,
+  and with one on a host that does not exist, the app sat in `PENDING_INSTALL` for more than three
+  minutes and was `INSTALL_FAILED`, `ready` false, some minutes later (seen at 11 minutes). It
+  stays there, and it can be deleted. So there **is** a failure state, and `WaitReady` stops on any state ending in
+  `_FAILED` instead of running into its timeout.
+
 | Fact | Source |
 |---|---|
 | An update returns immediately with `state: PENDING_UPDATE`, then becomes `READY`. A site `disabled` flip usually lands within 25 s | runbook |
@@ -42,9 +52,35 @@ failure state** in the enum. Every response object of a managed kind carries `st
 | The official wrapper waits for deletion by polling the same path until it answers **404** | wrapper `wait_deleted` |
 | The runbook's scripts wait for deletion by polling `/list/` until the id is gone, 5 s interval, 180 s limit | runbook |
 
-Consequence: `WaitReady` polls `read` for `ready`; `WaitDeleted` treats 404 on `read` as done. Since
-no failure state exists, a create that never becomes ready can only surface as a timeout, so the
-timeout diagnostic must include the last `state` seen.
+Consequence: `WaitReady` polls `read` for `ready`; `WaitDeleted` treats 404 on `read` as done. A
+create that neither becomes ready nor reaches a failed state can only surface as a timeout, so the
+timeout diagnostic includes the last `state` seen.
+
+**A delete can be lost.** Sent while the create of an app is still pending, `POST /app/delete/`
+answers 200, the app reads `PENDING_DELETE`, and about 6 seconds later it is `READY`: the create
+finished and the delete is gone. A domain deleted in `PENDING_CREATE` did go (404 after 11 s).
+`WaitDeleted` therefore sends the delete again whenever a poll finds the object in any state but
+`PENDING_DELETE`.
+
+### Deleting something that is still referred to
+
+`TestFindingParents` and `TestFindingShellUserWithApp`, 2026-10-12:
+
+| Delete of | Answer |
+|---|---|
+| a domain a site serves | 400 `[{"id":["Domain <name> is attached to site <site>. Please remove it from the site first."]}]` |
+| an app a site routes to | accepted. The app goes, and **the route is silently removed from the site**, which stays `READY` with one route fewer (none, in the test) |
+| a shell user that has an app | accepted, and **the app is deleted with it**: once the user was gone, a read of the app answered 404 |
+
+### Names
+
+- A second domain with a name in use answers 400 `[{"name":["Domain <name> already exists."]}]`.
+- A second app with a name the same shell user already uses answers 400
+  `[{"non_field_errors":["Name already in use by this osuser."]}]`.
+- **A name is not free while its delete is queued**: both creates above answer the same 400 until
+  the first object is gone. Once a read of it answers 404, the name can be used again at once.
+  Replacing an object under the same name must therefore wait for the deletion, which
+  `WaitDeleted` does; `create_before_destroy` cannot work for a resource that keeps its name.
 
 ## Kinds
 
@@ -118,7 +154,17 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
     replaces the app on a change to or from `CUS`.
   - The resource manages only the `json` keys the configuration names, so server-filled defaults
     never show as a diff.
-- **UNVERIFIED:** the full set of keys accepted per type, and what an invalid key or value answers.
+- `json` is checked against a schema per type (`TestFindingAppJSON`, 2026-10-12):
+  - Created without `json`: `STA` `{}`, no port. `NPF` and `APA` `{"php_version": 73}`, no port.
+    `CUS`, `SVN` and `DAV` `{}` and a port. `SLS`, `SLP` and `SLN` are refused, 400
+    `[{"json":["sym_link_path is required."]}]`.
+  - An unknown key answers 400 `{"errors":["Additional properties are not allowed ('<key>' was
+    unexpected)"]}`.
+  - `php_version` must be an integer, one of 56, 73, 74, 80, 81, 82, 83, 84, 85 on the server
+    tested. A string, even `"83"`, answers 400 `'83' is not of type 'integer'`.
+  - `external_port_access: true` was accepted on an `APA` app, so the schema is not strictly per
+    type. An update with `{}` changed nothing: `php_version` stayed.
+  - Still not known: the complete list of keys.
 - Deleting an app removes its directory on the server (runbook).
 - `POST /app/installed/` and `/app/failed/` are callbacks for installer scripts. Not for Terraform.
 
@@ -151,6 +197,11 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
   - Creating the site made no DNS record for its domain visible in `/dnsrecord/list/` right after
     the site became ready.
   - Name, domains, routes and `disabled` all update in place.
+- A site created with `generate_le: true` for a domain that resolves nowhere
+  (`TestFindingGenerateLE`, 2026-10-12): it becomes `READY` as usual, `cert` stays null for the two
+  minutes watched, no DNS record appears, and turning `generate_le` off again is accepted. Nothing
+  on the site says that no certificate was issued; the runbook's note about `/notice/list/` is the
+  only place to look.
 - Order of `routes` and `domains`: not relied upon. The resource models both as sets.
 
 ### dnsrecord
@@ -204,6 +255,19 @@ returns YAML (125 KB); with `application/json`, `?format=json` or
 
 ### Status codes and error bodies
 
+Validation errors, from `TestFindingErrors`, 2026-10-12. All are 400. A create or update answers
+with an **array**, one object per element of the request, mapping a field to a list of messages:
+
+| Request | Body |
+|---|---|
+| app or DNS record with a `type` outside the enum | `[{"type":["\"XXX\" is not a valid choice."]}]` |
+| domain name with invalid characters | `[{"name":["Domain name <name> invalid."]}]` |
+| site with an `ip4` id that does not exist | `[{"ip4":["Invalid pk \"<uuid>\" - object does not exist."]}]` |
+| an error on no one field | `[{"non_field_errors":["..."]}]` |
+| `A` record whose content is no address | `{"errors":["Enter a valid IPv4 address."]}`, an object and not an array |
+
+`errorMessages` in `internal/client/errors.go` reads all of these shapes.
+
 | Request | Status | Body |
 |---|---|---|
 | `read` of a well-formed UUID that does not exist, for osuser, ip, domain, app, site, dnsrecord | 404 | JSON `{"id":["Not found."]}` |
@@ -234,13 +298,13 @@ Consequences for the client:
   UUID into an object. An unknown embed key is ignored silently, with status 200
   (explore:`embed.txt`).
 
-### Names
+### Names, as surveyed
 
 In an account with 17 shell users, 37 apps, 35 sites and 126 domains: no two shell users, sites or
 domains share a name, and no app name is used twice, either within one shell user or across two
 (explore:`app.uniqueness.txt`, and `duplicate_names` in each `*.list.txt`). That is consistent with
-names being unique account-wide per kind, but it is an observation, not a rule: **UNVERIFIED** until
-a duplicate create is attempted. Import by name must therefore fail on more than one match rather
+names being unique account-wide per kind. A duplicate create has since been tried for domains and
+apps and was refused (see "Names" under "States and waiting"). Import by name must therefore fail on more than one match rather
 than pick one.
 
 ### Values seen
@@ -309,28 +373,19 @@ So a token cannot be limited to test objects and still create them. Whatever run
 tests holds service-level write on each kind it tests, and the safety prefix in the client is the
 only thing between a test and a real object.
 
-## UNVERIFIED, needs a write test
+## UNVERIFIED
 
-None of these can be answered with GET. Each is to be settled against `tfacc-` objects only, once a
-sandbox shell user and a scoped token exist.
+Settled on 2026-10-12 by the `TestFinding*` probes and recorded above: what a failed create looks
+like, deleting an object that is still referred to, the 400 bodies, name reuse after a delete, app
+settings per type, and `generate_le` on a domain that does not resolve.
 
-1. What a failed create looks like, given that `StateEnum` has no failure value.
-2. Deleting a parent that still has children: a shell user with apps, an app still routed by a
-   site, a domain attached to a site. Rejected, cascaded or orphaned?
-3. Settled: a token restricted by object ACL cannot create (403). With the service switches on it
-   can, and a missing id then answers 404.
-4. Settled: `default_password` is returned whether or not a `password` is sent.
-5. Partly settled, see the app section: the server adds defaults (`php_version` on `APA`). The
-   full set of accepted keys per type is still unknown.
-6. Sidestepped: `site.routes` and `site.domains` are sets in the provider.
-7. Partly settled: creating a site made no DNS record appear for its domain (see the site section).
-   Not checked: a site with `generate_le` on, or a domain that is a zone of its own.
-8. The 400 body for a validation error (duplicate name, bad enum, bad uuid). Seen once, as the
-   client's extracted message only: `POST /domain/update/` with `delegated_dns_zone: true` for a
-   subdomain of a domain the account already has answers 400, "Cannot add <name> as a delegated
-   DNS zone because ancestor domain <ancestor> already exists." (acceptance test, 2026-10-12). So
-   `delegated_dns_zone` can only be set on a name with no ancestor in the account, and its
-   in-place update has not been seen to succeed.
-9. Whether a name can be reused immediately after its delete is queued, or only after teardown.
-10. Settled: an ACL-hidden object answers 403 on `read`, and so does a missing id for a token
-    without the service read switch.
+Still open:
+
+1. Whether a password set through `osuser/update/` takes effect. Checking it needs a login.
+2. The complete list of `json` keys per app type.
+3. `generate_le` for a domain that does resolve to the server: when `cert` appears, and whether a
+   renewal replaces the certificate object.
+4. `delegated_dns_zone` set in place: refused for every name that has an ancestor domain in the
+   account, which every test domain has.
+5. Names are unique per shell user for apps and account-wide for domains (both seen refused).
+   Sites and shell users were not tried.

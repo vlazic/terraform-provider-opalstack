@@ -17,6 +17,7 @@ const (
 	appID    = "50000000-0000-0000-0000-000000000001"
 	app2ID   = "50000000-0000-0000-0000-000000000002"
 	app3ID   = "50000000-0000-0000-0000-000000000003"
+	siteID   = "60000000-0000-0000-0000-000000000001"
 )
 
 // seedAccount fills the fake with a small made-up account.
@@ -30,6 +31,8 @@ func seedAccount(f *fakeAPI) {
 		"type": "STA", "port": nil, "installer_url": nil, "json": obj{"php_version": "83"}})
 	f.seed("app", obj{"id": app2ID, "name": "twice", "osuser": osuserID, "type": "STA", "json": obj{}})
 	f.seed("app", obj{"id": app3ID, "name": "twice", "osuser": serverID, "type": "STA", "json": obj{}})
+	f.seed("site", obj{"id": siteID, "name": "www", "server": serverID, "ip4": ipID, "domains": []any{domainID},
+		"routes": []any{obj{"id": "70000000-0000-0000-0000-000000000001", "app": appID, "uri": "/"}}, "generate_le": true})
 }
 
 func TestDataSources(t *testing.T) {
@@ -54,6 +57,8 @@ data "opalstack_app" "narrowed" {
   name      = "twice"
   osuser_id = data.opalstack_osuser.u.id
 }
+data "opalstack_site" "w" { name = "www" }
+data "opalstack_site" "by_id" { id = data.opalstack_site.w.id }
 `,
 			Check: resource.ComposeAggregateTestCheckFunc(
 				resource.TestCheckResourceAttr("data.opalstack_osuser.u", "id", osuserID),
@@ -72,6 +77,13 @@ data "opalstack_app" "narrowed" {
 				resource.TestCheckResourceAttr("data.opalstack_app.a", "json", `{"php_version":"83"}`),
 				resource.TestCheckNoResourceAttr("data.opalstack_app.a", "port"),
 				resource.TestCheckResourceAttr("data.opalstack_app.narrowed", "id", app2ID),
+				resource.TestCheckResourceAttr("data.opalstack_site.w", "id", siteID),
+				resource.TestCheckTypeSetElemAttr("data.opalstack_site.w", "domain_ids.*", domainID),
+				resource.TestCheckTypeSetElemNestedAttrs("data.opalstack_site.w", "routes.*", map[string]string{"app_id": appID, "uri": "/"}),
+				resource.TestCheckResourceAttr("data.opalstack_site.w", "ip4_id", ipID),
+				resource.TestCheckNoResourceAttr("data.opalstack_site.w", "cert_id"),
+				resource.TestCheckResourceAttr("data.opalstack_site.w", "generate_le", "true"),
+				resource.TestCheckResourceAttr("data.opalstack_site.by_id", "name", "www"),
 			),
 		}},
 	})

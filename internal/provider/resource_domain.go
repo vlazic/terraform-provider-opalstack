@@ -40,7 +40,9 @@ func (r *domainResource) Metadata(_ context.Context, req resource.MetadataReques
 func (r *domainResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "A domain or subdomain of the account. Sites, DNS records and mail refer to it. " +
-			"The DKIM private key the API holds for the domain is never read into state.",
+			"The DKIM private key the API holds for the domain is never read into state.\n\n" +
+			"The API refuses to delete a domain that a site still serves. Remove it from the site's " +
+			"`domain_ids` in one apply and delete the domain in the next.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "UUID of the domain.",

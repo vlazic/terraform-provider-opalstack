@@ -41,7 +41,7 @@ Nothing on it is a test object unless rule 2 says so.
 ## Conventions
 
 - Resources: `opalstack_osuser`, `opalstack_domain`, `opalstack_app`, `opalstack_site`,
-  `opalstack_dnsrecord`. Data sources share those names, plus `opalstack_server` and `opalstack_ip`.
+  `opalstack_dnsrecord`. Data sources share those names except `opalstack_dnsrecord`, plus `opalstack_server` and `opalstack_ip`.
   Attributes that reference another object end in `_id`.
 - `internal/client` imports nothing from Terraform. It sends one-element JSON arrays for create and
   update, `[{"id": ...}]` for delete, and waits for `ready == true`.

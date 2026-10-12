@@ -4,11 +4,14 @@ page_title: "opalstack_domain Resource - opalstack"
 subcategory: ""
 description: |-
   A domain or subdomain of the account. Sites, DNS records and mail refer to it. The DKIM private key the API holds for the domain is never read into state.
+  The API refuses to delete a domain that a site still serves. Remove it from the site's domain_ids in one apply and delete the domain in the next.
 ---
 
 # opalstack_domain (Resource)
 
 A domain or subdomain of the account. Sites, DNS records and mail refer to it. The DKIM private key the API holds for the domain is never read into state.
+
+The API refuses to delete a domain that a site still serves. Remove it from the site's `domain_ids` in one apply and delete the domain in the next.
 
 ## Example Usage
 

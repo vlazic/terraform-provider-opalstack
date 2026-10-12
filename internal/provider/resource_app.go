@@ -53,7 +53,10 @@ func (r *appResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp
 	replace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "An app of a shell user: a directory, and for most types a process or a PHP pool, " +
-			"that a site routes requests to. Deleting an app deletes its directory.",
+			"that a site routes requests to. Deleting an app deletes its directory, and the API silently drops " +
+			"every site route that pointed at it.\n\n" +
+			"An app made with an `installer_url` whose installer does not succeed ends in the state " +
+			"`INSTALL_FAILED`; the create then fails and the app stays in state, to be destroyed or replaced.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{MarkdownDescription: "UUID of the app.", Computed: true, PlanModifiers: keep},
 			"name": schema.StringAttribute{

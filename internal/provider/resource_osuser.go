@@ -37,7 +37,7 @@ func (r *osuserResource) Metadata(_ context.Context, req resource.MetadataReques
 func (r *osuserResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "A shell user. Apps belong to one and run as it. Nothing about a shell user can be changed " +
-			"in place, and deleting one deletes its home directory.\n\n" +
+			"in place, and deleting one deletes its home directory **and every app that belongs to it**.\n\n" +
 			"The API chooses the password and reports it once, in `default_password`. This resource does not set a " +
 			"password of your own, and the API has no way to manage SSH keys.",
 		Attributes: map[string]schema.Attribute{
