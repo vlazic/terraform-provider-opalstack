@@ -253,7 +253,8 @@ provider "opalstack" {
 
 // accLogApp records what the API holds for an app's settings, which the spec
 // does not describe. Values under secret-looking keys are left out.
-func accLogApp(t *testing.T, label, addr string) resource.TestCheckFunc {
+func accLogApp(t *testing.T, label string) resource.TestCheckFunc {
+	const addr = "opalstack_app.a"
 	return func(s *terraform.State) error {
 		app, err := accClient(t).Apps().Read(context.Background(), s.RootModule().Resources[addr].Primary.ID)
 		if err != nil {
@@ -308,7 +309,7 @@ resource "opalstack_app" "a" {
 					resource.TestCheckResourceAttr(addr, "name", first),
 					resource.TestCheckResourceAttrSet(addr, "server_id"),
 					resource.TestCheckResourceAttrSet(addr, "osuser_name"),
-					accLogApp(t, "STA as created", addr),
+					accLogApp(t, "STA as created"),
 				),
 			},
 			{Config: config(first, "STA", ""), ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionNoop)},
@@ -319,25 +320,25 @@ resource "opalstack_app" "a" {
 				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionUpdate),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(addr, "type", "APA"),
-					accLogApp(t, "after STA to APA in place", addr),
+					accLogApp(t, "after STA to APA in place"),
 				),
 			},
 			{
 				Config:           config(second, "APA", ""),
 				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
-				Check:            accLogApp(t, "APA as created", addr),
+				Check:            accLogApp(t, "APA as created"),
 			},
 			{ // a managed setting; the framework fails the step if a plan remains afterwards
 				Config:           config(second, "APA", `json = jsonencode({ php_version = 83 })`),
 				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionUpdate),
-				Check:            accLogApp(t, "APA with php_version 83", addr),
+				Check:            accLogApp(t, "APA with php_version 83"),
 			},
 			{ // to CUS the app is replaced: in place the API would assign no port
 				Config:           config(second, "CUS", ""),
 				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttrSet(addr, "port"),
-					accLogApp(t, "CUS as created", addr),
+					accLogApp(t, "CUS as created"),
 				),
 			},
 		},
