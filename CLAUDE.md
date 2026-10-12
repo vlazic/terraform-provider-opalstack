@@ -18,9 +18,10 @@ The account this provider is developed against is a real production account.
 Nothing on it is a test object unless rule 2 says so.
 
 1. **The tokens.** The full-access one lives in `pass` at `Opalstack/tokens/full-access`,
-   the scoped test one at `Opalstack/tokens/tfacc`. The agent does
-   not run `pass` and never holds the token: scripts that need it read it themselves, and the owner
-   runs them. Never print, echo, log, commit or write the token anywhere. Do not run `env`,
+   the scoped test one at `Opalstack/tokens/tfacc`. The agent
+   never holds a token: scripts that need one read it from `pass` themselves. The owner runs the
+   ones that use the full-access token. The agent may run the ones that use the test token
+   (owner's decision, 2026-10-12). Never print, echo, log, commit or write the token anywhere. Do not run `env`,
    `printenv` or `set` unfiltered.
 2. **With the full-access token the live API is GET only. No exceptions.** No `POST` of any kind,
    to any path. Writes use the test token only, and only to objects whose name starts with `tfacc-`
