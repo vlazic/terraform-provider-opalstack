@@ -138,9 +138,20 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
   `primary_domain` can be read back and is a candidate attribute; site `json` stays out of the
   first version because nothing documents its keys.
 - `ip6` is null on every site of the surveyed account and `ip4` is always set.
+- A create with neither address answers 400 with a message under both fields: `ip4: An IPv4 or
+  IPv6 address is required.` and the same under `ip6` (`TestAccSite`, 2026-10-12). The resource
+  requires one of the two.
 - `disabled: true` takes the site offline completely (runbook).
 - Let's Encrypt results appear as entries in `/notice/list/`, not on the site (runbook).
-- **UNVERIFIED:** whether the order of `routes` and of `domains` is preserved by the server.
+- Observed live by `TestAccSite`, 2026-10-12:
+  - A site created with `generate_le: false` and one address has `ip6`, `cert` and
+    `primary_domain` null, `redirect` and `disabled` false.
+  - **A route `uri` without a trailing slash gets one**: `/two` is stored as `/two/`. The resource
+    requires `uri` to start and end with `/`.
+  - Creating the site made no DNS record for its domain visible in `/dnsrecord/list/` right after
+    the site became ready.
+  - Name, domains, routes and `disabled` all update in place.
+- Order of `routes` and `domains`: not relied upon. The resource models both as sets.
 
 ### dnsrecord
 
@@ -311,8 +322,9 @@ sandbox shell user and a scoped token exist.
 4. Settled: `default_password` is returned whether or not a `password` is sent.
 5. Partly settled, see the app section: the server adds defaults (`php_version` on `APA`). The
    full set of accepted keys per type is still unknown.
-6. Order preservation of `site.routes` and `site.domains`.
-7. Which DNS records a site creates on its own, and whether they appear in `/dnsrecord/list/`.
+6. Sidestepped: `site.routes` and `site.domains` are sets in the provider.
+7. Partly settled: creating a site made no DNS record appear for its domain (see the site section).
+   Not checked: a site with `generate_le` on, or a domain that is a zone of its own.
 8. The 400 body for a validation error (duplicate name, bad enum, bad uuid). Seen once, as the
    client's extracted message only: `POST /domain/update/` with `delegated_dns_zone: true` for a
    subdomain of a domain the account already has answers 400, "Cannot add <name> as a delegated

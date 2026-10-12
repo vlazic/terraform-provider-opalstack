@@ -91,7 +91,7 @@ func importByIDOrName[T any](ctx context.Context, k client.ReadKind[T], what str
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
 }
 
-// knownBool and knownInt64 return nil unless the value is set. The framework's
+// knownBool, knownInt64 and knownString return nil unless the value is set. The framework's
 // own pointer getters return a pointer to the zero value for an unknown one,
 // which would send false or 0 where the API is meant to choose.
 func knownBool(v types.Bool) *bool {
@@ -114,4 +114,20 @@ func withTimeout(ctx context.Context, configured func(context.Context, time.Dura
 	timeout, d := configured(ctx, defaultTimeout)
 	diags.Append(d...)
 	return context.WithTimeout(ctx, timeout)
+}
+
+func knownString(v types.String) *string {
+	if v.IsNull() || v.IsUnknown() {
+		return nil
+	}
+	return v.ValueStringPointer()
+}
+
+// nullableString is for a field an update can clear: an unknown value leaves
+// the field as it is, a null one clears it.
+func nullableString(v types.String) client.Nullable[string] {
+	if v.IsUnknown() {
+		return client.Nullable[string]{}
+	}
+	return client.FromPtr(v.ValueStringPointer())
 }

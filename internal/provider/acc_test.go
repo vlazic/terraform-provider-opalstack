@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -341,6 +342,155 @@ resource "opalstack_app" "a" {
 					accLogApp(t, "CUS as created"),
 				),
 			},
+		},
+	})
+}
+
+// accLogSite records what the API made of a site, and which DNS records exist
+// for its domains: the spec says nothing about either.
+func accLogSite(t *testing.T, label string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		ctx := context.Background()
+		c := accClient(t)
+		site, err := c.Sites().Read(ctx, s.RootModule().Resources["opalstack_site.s"].Primary.ID)
+		if err != nil {
+			return err
+		}
+		records, err := c.DNSRecords().List(ctx)
+		if err != nil {
+			return err
+		}
+		var recordTypes, uris []string
+		for _, rec := range records {
+			if slices.Contains(site.Domains, rec.Domain) {
+				recordTypes = append(recordTypes, rec.Type)
+			}
+		}
+		for _, r := range site.Routes {
+			uris = append(uris, r.URI)
+		}
+		t.Logf("FINDING %s: ip4=%v ip6=%v cert=%v primary_domain=%v redirect=%v generate_le=%v disabled=%v domains=%d route uris=%q dns records of its domains=%v",
+			label, site.IP4 != nil, site.IP6 != nil, site.Cert != nil, site.PrimaryDomain != nil,
+			site.Redirect, site.GenerateLE, site.Disabled, len(site.Domains), uris, recordTypes)
+		return nil
+	}
+}
+
+func TestAccSite(t *testing.T) {
+	base := accEnv(t, "OPALSTACK_TEST_DOMAIN_BASE")
+	accEnv(t, tokenEnvVar)
+	provider, osuserID := accSandboxProvider(t)
+	domainA, domainB := accName()+"."+base, accName()+"."+base
+	appOne, appTwo, siteName := accName(), accName(), accName()
+	const addr = "opalstack_site.s"
+	config := func(site string) string {
+		return provider + fmt.Sprintf(`
+data "opalstack_osuser" "sandbox" { id = %[1]q }
+data "opalstack_ip" "v4" { server_id = data.opalstack_osuser.sandbox.server_id }
+
+resource "opalstack_domain" "a" { name = %[2]q }
+resource "opalstack_domain" "b" { name = %[3]q }
+resource "opalstack_app" "one" {
+  name      = %[4]q
+  osuser_id = %[1]q
+  type      = "STA"
+}
+resource "opalstack_app" "two" {
+  name      = %[5]q
+  osuser_id = %[1]q
+  type      = "STA"
+}
+resource "opalstack_site" "s" {
+%[6]s
+}
+`, osuserID, domainA, domainB, appOne, appTwo, site)
+	}
+	// No certificate is requested: the test domains do not resolve anywhere.
+	minimal := fmt.Sprintf(`
+  name        = %q
+  domain_ids  = [opalstack_domain.a.id]
+  routes      = [{ app_id = opalstack_app.one.id }]
+  ip4_id      = data.opalstack_ip.v4.id
+  generate_le = false`, siteName)
+	full := fmt.Sprintf(`
+  name       = %q
+  domain_ids = [opalstack_domain.a.id, opalstack_domain.b.id]
+  routes = [
+    { app_id = opalstack_app.one.id },
+    { app_id = opalstack_app.two.id, uri = "/two/" },
+  ]
+  ip4_id      = data.opalstack_ip.v4.id
+  generate_le = false
+  disabled    = true`, siteName+"-b")
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories,
+		// When a step fails, what the API holds for the test site says why.
+		ErrorCheck: func(stepErr error) error {
+			sites, err := accClient(t).Sites().List(context.Background())
+			if err != nil {
+				return stepErr
+			}
+			for _, site := range sites {
+				if strings.HasPrefix(site.Name, accPrefix) {
+					var uris []string
+					for _, r := range site.Routes {
+						uris = append(uris, r.URI)
+					}
+					t.Logf("FINDING on error: state=%s domains=%d route uris=%q disabled=%v", site.State, len(site.Domains), uris, site.Disabled)
+				}
+			}
+			return stepErr
+		},
+		CheckDestroy: func(s *terraform.State) error {
+			ctx := context.Background()
+			c := accClient(t)
+			sites, err := c.Sites().List(ctx)
+			if err != nil {
+				return err
+			}
+			for _, site := range sites {
+				if strings.HasPrefix(site.Name, accPrefix) {
+					return fmt.Errorf("a test site was left behind (state %s)", site.State)
+				}
+			}
+			apps, err := c.Apps().List(ctx)
+			if err != nil {
+				return err
+			}
+			for _, a := range apps {
+				if strings.HasPrefix(a.Name, accPrefix) {
+					return fmt.Errorf("a test app was left behind (state %s)", a.State)
+				}
+			}
+			return accNoDomainsLeft(t)(s)
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: config(minimal),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "name", siteName),
+					resource.TestCheckResourceAttr(addr, "domain_ids.#", "1"),
+					resource.TestCheckResourceAttr(addr, "routes.#", "1"),
+					accLogSite(t, "created with one domain and one route"),
+				),
+			},
+			{Config: config(minimal), ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionNoop)},
+			{ResourceName: addr, ImportState: true, ImportStateVerify: true},
+			{ResourceName: addr, ImportState: true, ImportStateVerify: true, ImportStateId: siteName},
+			{
+				Config:           config(full),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionUpdate),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "name", siteName+"-b"),
+					resource.TestCheckResourceAttr(addr, "domain_ids.#", "2"),
+					resource.TestCheckResourceAttr(addr, "routes.#", "2"),
+					resource.TestCheckResourceAttr(addr, "disabled", "true"),
+					resource.TestCheckResourceAttrPair(addr, "ip4_id", "data.opalstack_ip.v4", "id"),
+					accLogSite(t, "renamed, two domains, two routes, disabled"),
+				),
+			},
+			{Config: config(full), ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionNoop)},
 		},
 	})
 }

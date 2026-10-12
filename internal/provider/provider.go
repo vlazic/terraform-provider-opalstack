@@ -161,7 +161,7 @@ func (p *opalstackProvider) Configure(ctx context.Context, req provider.Configur
 }
 
 func (p *opalstackProvider) Resources(context.Context) []func() resource.Resource {
-	return []func() resource.Resource{newDomainResource, newDNSRecordResource, newOSUserResource, newAppResource}
+	return []func() resource.Resource{newDomainResource, newDNSRecordResource, newOSUserResource, newAppResource, newSiteResource}
 }
 
 func (p *opalstackProvider) DataSources(context.Context) []func() datasource.DataSource {

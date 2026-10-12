@@ -37,6 +37,7 @@ type fakeAPI struct {
 var defaults = map[string]obj{
 	"app":       {"port": nil, "installer_url": nil},
 	"dnsrecord": {"priority": 10, "ttl": 3600},
+	"site":      {"ip4": nil, "ip6": nil, "cert": nil, "primary_domain": nil, "redirect": false, "generate_le": false, "disabled": false},
 	"domain":    {"delegated_dns_zone": false, "is_valid_hostname": true, "dkim_record": nil, "dkim_pubkey": nil, "dkim_privkey": "PRIVATE"},
 }
 
@@ -121,6 +122,18 @@ func (f *fakeAPI) wrote(kindVerb string) int {
 // fill adds what the API derives from a write: an app's server and shell user
 // name, and a setting of its own next to the ones the caller sent.
 func (f *fakeAPI) fill(kind string, o obj) {
+	if kind == "site" {
+		// Each route gets an id, and the site lives where its first app does.
+		routes, _ := o["routes"].([]any)
+		for i, r := range routes {
+			route := r.(obj)
+			route["id"] = fmt.Sprintf("70000000-0000-0000-0000-%012d", i)
+			if app, ok := f.objects[fmt.Sprint(route["app"])]; ok && i == 0 {
+				o["server"] = app["server"]
+			}
+		}
+		return
+	}
 	if kind != "app" {
 		return
 	}
