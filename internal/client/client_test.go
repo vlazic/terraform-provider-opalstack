@@ -19,6 +19,7 @@ const (
 	testToken = "1111111111111111111111111111111111111111"
 	idA       = "01010101-0202-0303-0404-050505050505"
 	idB       = "11111111-1212-1313-1414-151515151515"
+	idC       = "21212121-2222-2323-2424-252525252525"
 )
 
 type recorded struct {
@@ -502,6 +503,74 @@ func TestSafetyPrefix(t *testing.T) {
 		f.on("POST", "/dnsrecord/delete/", ok(`{"ok":"Queued for deletion."}`))
 		if err := c.DNSRecords().Delete(context.Background(), idA); err != nil {
 			t.Errorf("delete under a test domain: %v", err)
+		}
+	})
+
+	t.Run("an app is refused under a shell user that is neither prefixed nor the sandbox user", func(t *testing.T) {
+		f, c := setup(t)
+		f.on("GET", "/osuser/read/"+idB, ok(`{"id":"`+idB+`","name":"production"}`))
+		_, err := c.Apps().Create(context.Background(), AppCreate{Name: "tfacc-app", OSUser: idB, Type: "STA"})
+		if !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("err = %v, want ErrSafetyPrefix", err)
+		}
+		if n := posts(f); n != 0 {
+			t.Errorf("%d POST requests were sent", n)
+		}
+	})
+
+	t.Run("an app passes under the sandbox user and under a prefixed one", func(t *testing.T) {
+		f, c := setup(t)
+		c.cfg.SafetyOSUserID = idB
+		f.on("GET", "/osuser/read/"+idC, ok(`{"id":"`+idC+`","name":"tfacc-user"}`))
+		f.on("POST", "/app/create/", ok(`[{"id":"`+idA+`","name":"tfacc-app"}]`))
+		for _, osuser := range []string{idB, idC} {
+			if _, err := c.Apps().Create(context.Background(), AppCreate{Name: "tfacc-app", OSUser: osuser, Type: "STA"}); err != nil {
+				t.Errorf("under %s: %v", osuser, err)
+			}
+		}
+		if n := f.count("GET", "/osuser/read/"+idB); n != 0 {
+			t.Errorf("the sandbox user was read %d times", n)
+		}
+	})
+
+	t.Run("the sandbox user itself is never written", func(t *testing.T) {
+		f, c := setup(t)
+		c.cfg.SafetyOSUserID = idB
+		f.on("GET", "/osuser/read/"+idB, ok(`{"id":"`+idB+`","name":"sandbox"}`))
+		if err := c.OSUsers().Delete(context.Background(), idB); !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("err = %v, want ErrSafetyPrefix", err)
+		}
+		if n := posts(f); n != 0 {
+			t.Errorf("%d POST requests were sent", n)
+		}
+	})
+
+	t.Run("a site is refused when a domain or a routed app lacks the prefix", func(t *testing.T) {
+		f, c := setup(t)
+		f.on("GET", "/site/read/"+idA, ok(`{"id":"`+idA+`","name":"tfacc-site"}`))
+		f.on("GET", "/domain/read/"+idB, ok(`{"id":"`+idB+`","name":"tfacc-a.example.com"}`))
+		f.on("GET", "/domain/read/"+idC, ok(`{"id":"`+idC+`","name":"www.example.com"}`))
+		f.on("GET", "/app/read/"+idB, ok(`{"id":"`+idB+`","name":"tfacc-app"}`))
+		f.on("GET", "/app/read/"+idC, ok(`{"id":"`+idC+`","name":"production_app"}`))
+		f.on("POST", "/site/create/", ok(`[{"id":"`+idA+`","name":"tfacc-site"}]`))
+		ctx := context.Background()
+
+		good := SiteCreate{Name: "tfacc-site", Domains: []string{idB}, Routes: []Route{{App: idB, URI: "/"}}}
+		if _, err := c.Sites().Create(ctx, good); err != nil {
+			t.Fatalf("all references prefixed: %v", err)
+		}
+		before := posts(f)
+
+		_, err := c.Sites().Create(ctx, SiteCreate{Name: "tfacc-site", Domains: []string{idB, idC}})
+		if !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("foreign domain: err = %v, want ErrSafetyPrefix", err)
+		}
+		_, err = c.Sites().Update(ctx, SiteUpdate{ID: idA, Routes: []Route{{App: idB, URI: "/"}, {App: idC, URI: "/x"}}})
+		if !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("foreign app: err = %v, want ErrSafetyPrefix", err)
+		}
+		if n := posts(f) - before; n != 0 {
+			t.Errorf("%d POST requests were sent", n)
 		}
 	})
 }

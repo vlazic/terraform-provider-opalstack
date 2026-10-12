@@ -67,10 +67,9 @@ Nothing below may start while the full-access token is the only token. Rule 2 of
 4. Resources, one at a time, each with acceptance tests before the next: `opalstack_osuser`,
    `opalstack_domain`, `opalstack_app`, `opalstack_site`, `opalstack_dnsrecord`. Before the first
    real write of each kind, show the owner the exact request and wait for an OK.
-5. The safety prefix checks the name of the object written, and nothing the request merely
-   references. Before any app or site test, add: an app's shell user must be the sandbox user, and
-   a site's domains and the apps of its routes must themselves carry the prefix. Without that, a
-   test site named `tfacc-...` could be created over a real domain.
+5. Done: the safety prefix also checks what a request refers to. An app's shell user must carry
+   the prefix or be the one named by `safety_osuser_id`, and a site's domains and the apps of its
+   routes must carry the prefix. Each referenced object costs one GET.
 6. Sweepers that delete only `tfacc-` objects, never the sandbox user.
 7. Settle the remaining UNVERIFIED items with `tfacc-` objects and update the findings file.
 

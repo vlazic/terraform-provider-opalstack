@@ -32,6 +32,7 @@ type providerModel struct {
 	Token          types.String `tfsdk:"token"`
 	BaseURL        types.String `tfsdk:"base_url"`
 	SafetyPrefix   types.String `tfsdk:"safety_prefix"`
+	SafetyOSUserID types.String `tfsdk:"safety_osuser_id"`
 	RequestTimeout types.String `tfsdk:"request_timeout"`
 }
 
@@ -62,8 +63,14 @@ func (p *opalstackProvider) Schema(_ context.Context, _ provider.SchemaRequest, 
 			},
 			"safety_prefix": schema.StringAttribute{
 				MarkdownDescription: "When set, the provider refuses to create, update or delete any object whose name " +
-					"does not start with this prefix. A DNS record is judged by the name of its domain. " +
+					"does not start with this prefix, or that refers to one: the domains and apps of a site and " +
+					"the shell user of an app are checked too. A DNS record is judged by the name of its domain. " +
 					"Meant for development and testing against an account that also holds real objects.",
+				Optional: true,
+			},
+			"safety_osuser_id": schema.StringAttribute{
+				MarkdownDescription: "Used with `safety_prefix`: the id of the one shell user that apps may be created " +
+					"under although its name lacks the prefix. The user itself is still never changed or deleted.",
 				Optional: true,
 			},
 			"request_timeout": schema.StringAttribute{
@@ -88,7 +95,8 @@ func (p *opalstackProvider) Configure(ctx context.Context, req provider.Configur
 		name  string
 		value types.String
 	}{
-		{"token", cfg.Token}, {"base_url", cfg.BaseURL}, {"safety_prefix", cfg.SafetyPrefix}, {"request_timeout", cfg.RequestTimeout},
+		{"token", cfg.Token}, {"base_url", cfg.BaseURL}, {"safety_prefix", cfg.SafetyPrefix},
+		{"safety_osuser_id", cfg.SafetyOSUserID}, {"request_timeout", cfg.RequestTimeout},
 	} {
 		if setting.value.IsUnknown() {
 			resp.Diagnostics.AddAttributeError(path.Root(setting.name), "Unknown provider setting",
@@ -131,6 +139,7 @@ func (p *opalstackProvider) Configure(ctx context.Context, req provider.Configur
 		BaseURL:        cfg.BaseURL.ValueString(),
 		UserAgent:      "terraform-provider-opalstack/" + p.version,
 		SafetyPrefix:   cfg.SafetyPrefix.ValueString(),
+		SafetyOSUserID: cfg.SafetyOSUserID.ValueString(),
 		RequestTimeout: timeout,
 		Log: func(ctx context.Context, msg string, fields map[string]any) {
 			tflog.Debug(ctx, msg, fields)

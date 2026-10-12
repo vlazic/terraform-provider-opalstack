@@ -14,11 +14,41 @@ type ReadKind[T any] struct {
 	c    *Client
 	name string
 
-	// parentField and parentKind are set for a kind whose objects have no name
-	// of their own. The safety prefix is then checked on the name of the parent
-	// that parentField points at.
-	parentField string
-	parentKind  string
+	// refs are the request fields that point at other objects. The safety
+	// prefix is checked on each object a write refers to.
+	refs []ref
+	// nameless marks a kind whose objects have no name of their own. Such an
+	// object is judged by the name of the object its first ref points at.
+	nameless bool
+}
+
+// ref is a field holding the id of an object of another kind. path is dotted:
+// "routes.app" is the app of each element of routes. The field may hold one id
+// or a list of them.
+type ref struct{ path, kind string }
+
+func (r ref) ids(fields map[string]any) []string {
+	return refIDs(fields, strings.Split(r.path, "."))
+}
+
+func refIDs(v any, path []string) []string {
+	switch t := v.(type) {
+	case string:
+		if len(path) == 0 && t != "" {
+			return []string{t}
+		}
+	case []any:
+		var out []string
+		for _, item := range t {
+			out = append(out, refIDs(item, path)...)
+		}
+		return out
+	case map[string]any:
+		if len(path) > 0 {
+			return refIDs(t[path[0]], path[1:])
+		}
+	}
+	return nil
 }
 
 // List returns every object of the kind. The API does not paginate.
@@ -133,14 +163,13 @@ func (k Kind[T, C, U]) postOne(ctx context.Context, verb string, req any) (*T, e
 //   - a request with an "id" targets an existing object, whose current name is
 //     looked up, because the prefix is a property of the name and not of the id;
 //   - a request with a "name" creates or renames, and the new name is checked;
-//   - a request with the kind's parent field is checked on that parent's name.
+//   - every object the request refers to through one of the kind's refs, such
+//     as the domains and apps of a site, is checked on its name too. The one
+//     exception is the shell user named by Config.SafetyOSUserID.
 //
 // Anything it cannot establish is a refusal. A refusal never matches
 // ErrNotFound, even when a lookup failed that way: the object the caller asked
 // about may well exist, and "not found" would let a resource drop it from state.
-//
-// The guard does not look at objects a request merely references, such as the
-// domains and apps of a site or the shell user of an app.
 func (k Kind[T, C, U]) guard(ctx context.Context, verb string, req any) error {
 	prefix := k.c.cfg.SafetyPrefix
 	if prefix == "" {
@@ -178,12 +207,17 @@ func (k Kind[T, C, U]) guard(ctx context.Context, verb string, req any) error {
 	if name := field("name"); name != "" {
 		names = append(names, named{"the requested name", name})
 	}
-	if parentID := field(k.parentField); k.parentField != "" && parentID != "" {
-		name, err := k.parent().nameOf(ctx, parentID)
-		if err != nil {
-			return refuse("cannot read %s %s to check its name: %v", k.parentKind, parentID, err)
+	for _, r := range k.refs {
+		for _, refID := range r.ids(fields) {
+			if r.kind == "osuser" && refID == k.c.cfg.SafetyOSUserID {
+				continue
+			}
+			name, err := k.other(r.kind).nameOf(ctx, refID)
+			if err != nil {
+				return refuse("cannot read %s %s to check its name: %v", r.kind, refID, err)
+			}
+			names = append(names, named{"the name of the " + r.kind + " it refers to", name})
 		}
-		names = append(names, named{"the name of its " + k.parentKind, name})
 	}
 
 	if len(names) == 0 {
@@ -197,23 +231,24 @@ func (k Kind[T, C, U]) guard(ctx context.Context, verb string, req any) error {
 	return nil
 }
 
-func (k ReadKind[T]) parent() ReadKind[map[string]any] {
-	return ReadKind[map[string]any]{c: k.c, name: k.parentKind}
+func (k ReadKind[T]) other(kind string) ReadKind[map[string]any] {
+	return ReadKind[map[string]any]{c: k.c, name: kind}
 }
 
 // nameOf returns the name the safety prefix applies to for an existing object:
-// its own, or its parent's when the kind has a parent field.
+// its own, or for a nameless kind that of the object its first ref points at.
 func (k ReadKind[T]) nameOf(ctx context.Context, id string) (string, error) {
 	obj, err := read[map[string]any](ctx, k.c, k.name, id)
 	if err != nil {
 		return "", err
 	}
-	if k.parentField != "" {
-		parentID, _ := (*obj)[k.parentField].(string)
-		if parentID == "" {
-			return "", fmt.Errorf("opalstack: %s %s has no %s", k.name, id, k.parentField)
+	if k.nameless {
+		parent := k.refs[0]
+		ids := parent.ids(*obj)
+		if len(ids) != 1 {
+			return "", fmt.Errorf("opalstack: %s %s has no %s", k.name, id, parent.path)
 		}
-		return k.parent().nameOf(ctx, parentID)
+		return k.other(parent.kind).nameOf(ctx, ids[0])
 	}
 	name, _ := (*obj)["name"].(string)
 	if name == "" {

@@ -71,5 +71,7 @@ func (r SiteCreate) MarshalJSON() ([]byte, error) {
 }
 
 func (c *Client) Sites() Kind[Site, SiteCreate, SiteUpdate] {
-	return kind[Site, SiteCreate, SiteUpdate](c, "site")
+	k := kind[Site, SiteCreate, SiteUpdate](c, "site")
+	k.refs = []ref{{"domains", "domain"}, {"routes.app", "app"}}
+	return k
 }

@@ -52,6 +52,7 @@ To keep the override out of your global configuration, save the block to any fil
 provider "opalstack" {
   # token           = "..."      # default: the OPALSTACK_TOKEN environment variable
   # safety_prefix   = "tfacc-"   # refuse writes to objects not named with this prefix
+  # safety_osuser_id = "..."     # with safety_prefix: the one unprefixed shell user apps may use
   # request_timeout = "30s"
 }
 ```

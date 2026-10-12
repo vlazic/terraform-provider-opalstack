@@ -44,6 +44,12 @@ type Config struct {
 	// name of its own and is judged by the name of its domain.
 	SafetyPrefix string
 
+	// SafetyOSUserID is the one shell user that an app may be created under
+	// although its name lacks the safety prefix. Every other object a write
+	// refers to, such as the domains and apps of a site, must carry the prefix.
+	// The user itself is still never updated or deleted.
+	SafetyOSUserID string
+
 	// RequestTimeout bounds a single HTTP round trip.
 	RequestTimeout time.Duration
 

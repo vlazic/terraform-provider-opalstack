@@ -32,5 +32,7 @@ type AppUpdate struct {
 }
 
 func (c *Client) Apps() Kind[App, AppCreate, AppUpdate] {
-	return kind[App, AppCreate, AppUpdate](c, "app")
+	k := kind[App, AppCreate, AppUpdate](c, "app")
+	k.refs = []ref{{"osuser", "osuser"}}
+	return k
 }

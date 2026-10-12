@@ -30,6 +30,6 @@ type DNSRecordUpdate struct {
 // A DNS record has no name, so the safety prefix is checked on its domain.
 func (c *Client) DNSRecords() Kind[DNSRecord, DNSRecordCreate, DNSRecordUpdate] {
 	k := kind[DNSRecord, DNSRecordCreate, DNSRecordUpdate](c, "dnsrecord")
-	k.parentField, k.parentKind = "domain", "domain"
+	k.refs, k.nameless = []ref{{"domain", "domain"}}, true
 	return k
 }
