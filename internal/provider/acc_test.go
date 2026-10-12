@@ -98,13 +98,11 @@ func TestAccDomain(t *testing.T) {
 			},
 			{ResourceName: addr, ImportState: true, ImportStateVerify: true},
 			{ResourceName: addr, ImportState: true, ImportStateVerify: true, ImportStateId: first},
+			// No in-place update here: delegated_dns_zone is the only field that can
+			// change, and the API refuses it for a name under a domain the account
+			// already has, which every test domain is. See API_FINDINGS.md.
 			{
-				Config:           accProvider + delegatedDomain(first),
-				ConfigPlanChecks: expect(plancheck.ResourceActionUpdate),
-				Check:            resource.TestCheckResourceAttr(addr, "delegated_dns_zone", "true"),
-			},
-			{
-				Config:           accProvider + delegatedDomain(second),
+				Config:           accProvider + `resource "opalstack_domain" "d" { name = "` + second + `" }`,
 				ConfigPlanChecks: expect(plancheck.ResourceActionDestroyBeforeCreate),
 				Check:            resource.TestCheckResourceAttr(addr, "name", second),
 			},
@@ -129,7 +127,7 @@ func TestAccDomain(t *testing.T) {
 						}
 					}
 				},
-				Config:           accProvider + delegatedDomain(second),
+				Config:           accProvider + `resource "opalstack_domain" "d" { name = "` + second + `" }`,
 				ConfigPlanChecks: expect(plancheck.ResourceActionCreate),
 			},
 		},

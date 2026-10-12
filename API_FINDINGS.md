@@ -300,7 +300,12 @@ sandbox shell user and a scoped token exist.
 5. Which `json` keys an app accepts per type, and whether the server adds defaults.
 6. Order preservation of `site.routes` and `site.domains`.
 7. Which DNS records a site creates on its own, and whether they appear in `/dnsrecord/list/`.
-8. The 400 body for a validation error (duplicate name, bad enum, bad uuid).
+8. The 400 body for a validation error (duplicate name, bad enum, bad uuid). Seen once, as the
+   client's extracted message only: `POST /domain/update/` with `delegated_dns_zone: true` for a
+   subdomain of a domain the account already has answers 400, "Cannot add <name> as a delegated
+   DNS zone because ancestor domain <ancestor> already exists." (acceptance test, 2026-10-12). So
+   `delegated_dns_zone` can only be set on a name with no ancestor in the account, and its
+   in-place update has not been seen to succeed.
 9. Whether a name can be reused immediately after its delete is queued, or only after teardown.
 10. Settled: an ACL-hidden object answers 403 on `read`, and so does a missing id for a token
     without the service read switch.
