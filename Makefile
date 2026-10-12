@@ -16,8 +16,13 @@ build: ## Compile everything
 install: ## Install the provider binary into GOBIN, for dev_overrides
 	go install .
 
+# The provider tests drive a real terraform binary against a fake API. A
+# version-manager shim does not work in the temporary directory they run in, so
+# the binary behind it is resolved here. Without one those tests are skipped.
+TERRAFORM := $(shell asdf which terraform 2>/dev/null || command -v terraform)
+
 test: ## Unit tests. Offline: no request leaves the machine
-	go test -race -count=1 ./...
+	TF_ACC_TERRAFORM_PATH=$(TERRAFORM) CHECKPOINT_DISABLE=1 go test -race -count=1 ./...
 
 lint: ## gofmt, go vet and golangci-lint
 	@test -z "$$(gofmt -l .)" || { gofmt -l .; echo "gofmt: the files above need formatting"; exit 1; }

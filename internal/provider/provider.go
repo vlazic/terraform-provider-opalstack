@@ -4,6 +4,7 @@ package provider
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -26,6 +27,8 @@ var _ provider.Provider = (*opalstackProvider)(nil)
 
 type opalstackProvider struct {
 	version string
+	// httpClient is nil outside the tests, which use it to reach a fake API.
+	httpClient *http.Client
 }
 
 type providerModel struct {
@@ -141,6 +144,7 @@ func (p *opalstackProvider) Configure(ctx context.Context, req provider.Configur
 		SafetyPrefix:   cfg.SafetyPrefix.ValueString(),
 		SafetyOSUserID: cfg.SafetyOSUserID.ValueString(),
 		RequestTimeout: timeout,
+		HTTPClient:     p.httpClient,
 		Log: func(ctx context.Context, msg string, fields map[string]any) {
 			tflog.Debug(ctx, msg, fields)
 		},
@@ -158,5 +162,7 @@ func (p *opalstackProvider) Resources(context.Context) []func() resource.Resourc
 }
 
 func (p *opalstackProvider) DataSources(context.Context) []func() datasource.DataSource {
-	return nil
+	return []func() datasource.DataSource{
+		newServerDataSource, newIPDataSource, newOSUserDataSource, newDomainDataSource, newAppDataSource,
+	}
 }
