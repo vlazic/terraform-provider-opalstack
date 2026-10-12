@@ -3,7 +3,7 @@
 A Terraform and OpenTofu provider for [Opalstack](https://www.opalstack.com) managed hosting, built
 on terraform-plugin-framework. Opalstack is unrelated to Opal (opal.dev).
 
-**Status: private.** Twelve resources and six data sources exist, are documented in
+**Status: private, released as v0.1.0 on GitHub only.** Twelve resources and six data sources exist, are documented in
 [`docs/`](docs/index.md), and pass acceptance tests against a real account. [`PLAN.md`](PLAN.md)
 says what is decided and what comes next.
 

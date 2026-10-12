@@ -31,7 +31,10 @@ Written to be read with no other context. Facts about the API are in
   account: `opalstack_mariauser`, `opalstack_mariadb`, `opalstack_psqluser`, `opalstack_psqldb`
   (one implementation for both engines, `resource_database.go`), `opalstack_mailuser`,
   `opalstack_address` and `opalstack_cert`.
-- `make sweep` deletes leftover test objects. It skips a kind the token cannot list. `make docs` regenerates `docs/` from the schemas
+- `make sweep` deletes leftover test objects, and fails on a kind the token cannot list.
+- v0.1.0 was tagged and released on 2026-10-12 as a private GitHub release: 13 archives, the
+  checksum file and its GPG signature. `make snapshot` builds the same archives locally. Nothing
+  is published to a registry. `make docs` regenerates `docs/` from the schemas
   and `examples/`.
 
 ## Decisions that differ from the first design notes
@@ -97,9 +100,8 @@ Written to be read with no other context. Facts about the API are in
 
 ## Next
 
-1. A release: `.goreleaser.yml` exists and has never been run.
-2. The open items at the end of `API_FINDINGS.md`.
-3. Not planned: `osvar`, a settable shell user password, a mailbox's filter rules and
+1. The open items at the end of `API_FINDINGS.md`.
+2. Not planned: `osvar`, a settable shell user password, a mailbox's filter rules and
    autoresponder, quarantined mail, notices.
 
 ## Before this repository is ever made public
