@@ -32,7 +32,7 @@ Written to be read with no other context. Facts about the API are in
   (one implementation for both engines, `resource_database.go`), `opalstack_mailuser`,
   `opalstack_address` and `opalstack_cert`.
 - `make sweep` deletes leftover test objects, and fails on a kind the token cannot list.
-- v0.1.0 was tagged and released on 2026-10-12 as a private GitHub release: 13 archives, the
+- v0.1.0 and v0.1.1 were tagged and released on 2026-10-12 as private GitHub releases: 13 archives, the
   checksum file and its GPG signature. `make snapshot` builds the same archives locally. Nothing
   is published to a registry. `make docs` regenerates `docs/` from the schemas
   and `examples/`.
