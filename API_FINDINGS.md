@@ -267,6 +267,20 @@ object entries are one shell user (read) and one domain (read and write). Output
   domain the token has read and write on answered 403. Creating needs the service write switch of
   the kind, which covers every object of that kind.
 
+With the service read and write switches for domain turned on (same day, same two scripts):
+
+| Request | Answer |
+|---|---|
+| `domain/list` | 200, every domain of the account |
+| `read` of a domain outside the object entries | 200 |
+| `read` of a missing id | 404 `{"id":["Not found."]}` |
+| `POST /domain/create/` with only `name` | 200, `PENDING_CREATE`, `ready` false, `delegated_dns_zone` false, `is_valid_hostname` true |
+| `read` of the new domain | `PENDING_CREATE` on the first read, `READY` about 6 seconds later |
+| `POST /domain/delete/` | 200 `{"ok":"Queued for deletion."}` |
+| `read` after the delete | 200 `PENDING_DELETE` once, then 404 about 6 seconds later |
+
+The other kinds stayed at 403: a service switch covers its own kind only.
+
 So a token cannot be limited to test objects and still create them. Whatever runs the acceptance
 tests holds service-level write on each kind it tests, and the safety prefix in the client is the
 only thing between a test and a real object.
@@ -279,8 +293,8 @@ sandbox shell user and a scoped token exist.
 1. What a failed create looks like, given that `StateEnum` has no failure value.
 2. Deleting a parent that still has children: a shell user with apps, an app still routed by a
    site, a domain attached to a site. Rejected, cascaded or orphaned?
-3. Settled: a token restricted by object ACL cannot create (403). Still open: with the service
-   switches on, what a read of a missing id answers (404 expected, as with the full-access token).
+3. Settled: a token restricted by object ACL cannot create (403). With the service switches on it
+   can, and a missing id then answers 404.
 4. `default_password`: present when no `password` is sent? (With one sent: present, different
    from it, and never readable later. See the osuser section.)
 5. Which `json` keys an app accepts per type, and whether the server adds defaults.

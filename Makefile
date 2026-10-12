@@ -24,6 +24,9 @@ TERRAFORM := $(shell asdf which terraform 2>/dev/null || command -v terraform)
 test: ## Unit tests. Offline: no request leaves the machine
 	TF_ACC_TERRAFORM_PATH=$(TERRAFORM) CHECKPOINT_DISABLE=1 go test -race -count=1 ./...
 
+testacc: ## Acceptance tests against the real account. Needs OPALSTACK_TOKEN and the sandbox variables; RUN=TestAccName picks one
+	TF_ACC=1 TF_ACC_TERRAFORM_PATH=$(TERRAFORM) CHECKPOINT_DISABLE=1 go test ./internal/provider -v -p 1 -count=1 -timeout 60m -run '$(or $(RUN),^TestAcc)'
+
 lint: ## gofmt, go vet and golangci-lint
 	@test -z "$$(gofmt -l .)" || { gofmt -l .; echo "gofmt: the files above need formatting"; exit 1; }
 	go vet ./...
@@ -39,4 +42,4 @@ leaks: ## Scan the git history and the staged changes for secrets
 
 check: lint test leaks ## Everything that must pass before a commit. Stage first: leaks reads the index
 
-.PHONY: help build install test lint leaks check
+.PHONY: help build install test testacc lint leaks check
