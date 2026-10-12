@@ -90,13 +90,11 @@ func (m *domainModel) set(d *client.Domain) {
 func (r *domainResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var m domainModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
-	timeout, diags := m.Timeouts.Create(ctx, defaultTimeout)
-	resp.Diagnostics.Append(diags...)
+	ctx, cancel := withTimeout(ctx, m.Timeouts.Create, &resp.Diagnostics)
+	defer cancel()
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 
 	domains := r.client.Domains()
 	created, err := domains.Create(ctx, client.DomainCreate{
@@ -138,13 +136,11 @@ func (r *domainResource) Read(ctx context.Context, req resource.ReadRequest, res
 func (r *domainResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var m domainModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
-	timeout, diags := m.Timeouts.Update(ctx, defaultTimeout)
-	resp.Diagnostics.Append(diags...)
+	ctx, cancel := withTimeout(ctx, m.Timeouts.Update, &resp.Diagnostics)
+	defer cancel()
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 
 	domains := r.client.Domains()
 	if _, err := domains.Update(ctx, client.DomainUpdate{
@@ -166,13 +162,11 @@ func (r *domainResource) Update(ctx context.Context, req resource.UpdateRequest,
 func (r *domainResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var m domainModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &m)...)
-	timeout, diags := m.Timeouts.Delete(ctx, defaultTimeout)
-	resp.Diagnostics.Append(diags...)
+	ctx, cancel := withTimeout(ctx, m.Timeouts.Delete, &resp.Diagnostics)
+	defer cancel()
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	resp.Diagnostics.Append(deleteAndWait(ctx, r.client.Domains(), "domain", m.ID.ValueString())...)
 }
 

@@ -107,3 +107,11 @@ func knownInt64(v types.Int64) *int64 {
 	}
 	return v.ValueInt64Pointer()
 }
+
+// withTimeout bounds ctx by one of a resource's configured timeouts. The caller
+// checks diags afterwards, which also covers reading the plan or state before.
+func withTimeout(ctx context.Context, configured func(context.Context, time.Duration) (time.Duration, diag.Diagnostics), diags *diag.Diagnostics) (context.Context, context.CancelFunc) {
+	timeout, d := configured(ctx, defaultTimeout)
+	diags.Append(d...)
+	return context.WithTimeout(ctx, timeout)
+}

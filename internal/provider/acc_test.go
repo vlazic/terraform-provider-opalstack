@@ -187,3 +187,54 @@ resource "opalstack_dnsrecord" "r" {
 		},
 	})
 }
+
+func TestAccOSUser(t *testing.T) {
+	sandbox := accEnv(t, "OPALSTACK_TEST_OSUSER")
+	accEnv(t, tokenEnvVar)
+	first, second := accName(), accName()
+	const addr = "opalstack_osuser.u"
+	// The new user goes on the server the sandbox user lives on.
+	config := func(name string) string {
+		return accProvider + fmt.Sprintf(`
+data "opalstack_osuser" "sandbox" { name = %q }
+resource "opalstack_osuser" "u" {
+  name      = %q
+  server_id = data.opalstack_osuser.sandbox.server_id
+}
+`, sandbox, name)
+	}
+	noPassword := []string{"default_password"}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories,
+		CheckDestroy: func(*terraform.State) error {
+			users, err := accClient(t).OSUsers().List(context.Background())
+			if err != nil {
+				return err
+			}
+			for _, u := range users {
+				if strings.HasPrefix(u.Name, accPrefix) {
+					return fmt.Errorf("a test shell user was left behind (state %s)", u.State)
+				}
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: config(first),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "name", first),
+					resource.TestCheckResourceAttrPair(addr, "server_id", "data.opalstack_osuser.sandbox", "server_id"),
+					resource.TestCheckResourceAttrSet(addr, "default_password"),
+				),
+			},
+			{ResourceName: addr, ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: noPassword},
+			{ResourceName: addr, ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: noPassword, ImportStateId: first},
+			{
+				Config:           config(second),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
+				Check:            resource.TestCheckResourceAttr(addr, "name", second),
+			},
+		},
+	})
+}

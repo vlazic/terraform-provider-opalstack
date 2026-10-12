@@ -94,13 +94,11 @@ func (m *dnsRecordModel) set(rec *client.DNSRecord) {
 func (r *dnsRecordResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var m dnsRecordModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
-	timeout, diags := m.Timeouts.Create(ctx, defaultTimeout)
-	resp.Diagnostics.Append(diags...)
+	ctx, cancel := withTimeout(ctx, m.Timeouts.Create, &resp.Diagnostics)
+	defer cancel()
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 
 	records := r.client.DNSRecords()
 	created, err := records.Create(ctx, client.DNSRecordCreate{
@@ -144,13 +142,11 @@ func (r *dnsRecordResource) Read(ctx context.Context, req resource.ReadRequest, 
 func (r *dnsRecordResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var m dnsRecordModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
-	timeout, diags := m.Timeouts.Update(ctx, defaultTimeout)
-	resp.Diagnostics.Append(diags...)
+	ctx, cancel := withTimeout(ctx, m.Timeouts.Update, &resp.Diagnostics)
+	defer cancel()
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 
 	records := r.client.DNSRecords()
 	if _, err := records.Update(ctx, client.DNSRecordUpdate{
@@ -174,13 +170,11 @@ func (r *dnsRecordResource) Update(ctx context.Context, req resource.UpdateReque
 func (r *dnsRecordResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var m dnsRecordModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &m)...)
-	timeout, diags := m.Timeouts.Delete(ctx, defaultTimeout)
-	resp.Diagnostics.Append(diags...)
+	ctx, cancel := withTimeout(ctx, m.Timeouts.Delete, &resp.Diagnostics)
+	defer cancel()
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	resp.Diagnostics.Append(deleteAndWait(ctx, r.client.DNSRecords(), "DNS record", m.ID.ValueString())...)
 }
 

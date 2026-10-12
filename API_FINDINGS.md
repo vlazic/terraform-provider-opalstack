@@ -68,8 +68,9 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
   create response had a `default_password`, it was **not** the password sent, the response state
   was `PENDING_CREATE`, and a `read` once the user was ready did not return `default_password`.
   So the password sent on create is ignored, and the server's one is available exactly once.
-- **UNVERIFIED:** whether `default_password` is also returned when `password` is omitted, and
-  whether a password set through update takes effect.
+- `default_password` is also returned when no `password` is sent (`TestAccOSUser`, 2026-10-12).
+  The provider sends none and exposes the value as a sensitive computed attribute.
+- **UNVERIFIED:** whether a password set through update takes effect. The resource does not offer it.
 - The API has no way to manage SSH keys on a shell user (runbook).
 
 ### domain
@@ -298,8 +299,7 @@ sandbox shell user and a scoped token exist.
    site, a domain attached to a site. Rejected, cascaded or orphaned?
 3. Settled: a token restricted by object ACL cannot create (403). With the service switches on it
    can, and a missing id then answers 404.
-4. `default_password`: present when no `password` is sent? (With one sent: present, different
-   from it, and never readable later. See the osuser section.)
+4. Settled: `default_password` is returned whether or not a `password` is sent.
 5. Which `json` keys an app accepts per type, and whether the server adds defaults.
 6. Order preservation of `site.routes` and `site.domains`.
 7. Which DNS records a site creates on its own, and whether they appear in `/dnsrecord/list/`.

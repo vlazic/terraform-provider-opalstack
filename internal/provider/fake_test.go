@@ -39,6 +39,11 @@ var defaults = map[string]obj{
 	"domain":    {"delegated_dns_zone": false, "is_valid_hostname": true, "dkim_record": nil, "dkim_pubkey": nil, "dkim_privkey": "PRIVATE"},
 }
 
+// createOnly are the fields that only the answer to a create carries.
+var createOnly = map[string]obj{
+	"osuser": {"default_password": "fake-default-password"},
+}
+
 // seed adds an object as if it had always been there.
 func (f *fakeAPI) seed(kind string, o obj) {
 	f.mu.Lock()
@@ -163,7 +168,9 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		maps.Copy(o, req)
 		o["state"], o["ready"] = "PENDING_CREATE", false
 		f.objects[o["id"].(string)] = o
-		reply(http.StatusOK, []obj{public(o)})
+		answer := public(o)
+		maps.Copy(answer, createOnly[kind])
+		reply(http.StatusOK, []obj{answer})
 		return
 	}
 	id, _ := req["id"].(string)
