@@ -1,5 +1,7 @@
 package client
 
+import "encoding/json"
+
 // MailUser is a mailbox.
 type MailUser struct {
 	Status
@@ -43,12 +45,32 @@ type AddressCreate struct {
 	Forwards     []string `json:"forwards"`
 }
 
-// AddressUpdate replaces both lists. The source cannot be changed here: an
+// AddressUpdate replaces both lists: a nil one is sent as empty. The source cannot be changed here: an
 // address with another source is another address.
 type AddressUpdate struct {
 	ID           string   `json:"id"`
 	Destinations []string `json:"destinations"`
 	Forwards     []string `json:"forwards"`
+}
+
+func (r AddressCreate) MarshalJSON() ([]byte, error) {
+	type plain AddressCreate // drops this method, so the call below does not recurse
+	r.Destinations, r.Forwards = orEmpty(r.Destinations), orEmpty(r.Forwards)
+	return json.Marshal(plain(r))
+}
+
+func (r AddressUpdate) MarshalJSON() ([]byte, error) {
+	type plain AddressUpdate
+	r.Destinations, r.Forwards = orEmpty(r.Destinations), orEmpty(r.Forwards)
+	return json.Marshal(plain(r))
+}
+
+// orEmpty makes a nil list an empty one, which marshals as [] and not as null.
+func orEmpty(list []string) []string {
+	if list == nil {
+		return []string{}
+	}
+	return list
 }
 
 // An address has no name. The safety prefix is checked on its source, and on

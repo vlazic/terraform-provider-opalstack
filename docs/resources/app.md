@@ -4,14 +4,14 @@ page_title: "opalstack_app Resource - opalstack"
 subcategory: ""
 description: |-
   An app of a shell user: a directory, and for most types a process or a PHP pool, that a site routes requests to. Deleting an app deletes its directory, and the API silently drops every site route that pointed at it.
-  An app made with an installer_url whose installer does not succeed ends in the state INSTALL_FAILED; the create then fails and the app stays in state, to be destroyed or replaced.
+  An app made with an installer_url whose installer does not succeed ends in the state INSTALL_FAILED, which took the API some ten minutes to report when tested. The create then fails and the app stays in state, to be destroyed or replaced. Set timeouts.create above the default of ten minutes to see that state reported and not a timeout.
 ---
 
 # opalstack_app (Resource)
 
 An app of a shell user: a directory, and for most types a process or a PHP pool, that a site routes requests to. Deleting an app deletes its directory, and the API silently drops every site route that pointed at it.
 
-An app made with an `installer_url` whose installer does not succeed ends in the state `INSTALL_FAILED`; the create then fails and the app stays in state, to be destroyed or replaced.
+An app made with an `installer_url` whose installer does not succeed ends in the state `INSTALL_FAILED`, which took the API some ten minutes to report when tested. The create then fails and the app stays in state, to be destroyed or replaced. Set `timeouts.create` above the default of ten minutes to see that state reported and not a timeout.
 
 ## Example Usage
 

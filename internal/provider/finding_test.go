@@ -484,7 +484,8 @@ func (p *probe) took(err error) string {
 	if err != nil {
 		return answer(err)
 	}
-	body := p.answered
+	// Masked before it is cut: half a UUID would not be recognised as one.
+	body := uuidInText.ReplaceAllString(p.mask.Replace(p.answered), "<uuid>")
 	if len(body) > 700 {
 		body = body[:700] + "..."
 	}
@@ -513,14 +514,14 @@ func probeDatabases(p *probe, users client.DBUserKind, dbs client.DBKind) {
 	_, err = users.WaitReady(p.ctx, plain.ID)
 	p.must(err)
 
-	given, err := users.Create(p.ctx, client.DBUserCreate{Server: sandbox.Server, Name: accName(), Password: accName() + "-Aa1"})
+	given, err := users.Create(p.ctx, client.DBUserCreate{Server: sandbox.Server, Name: accName(), Password: accPassword()})
 	p.find("user created with a password: %s", p.took(err))
 	p.must(err)
 	later(p, users, given.ID)
 	_, err = users.WaitReady(p.ctx, given.ID)
 	p.must(err)
 
-	_, err = users.Update(p.ctx, client.DBUserUpdate{ID: given.ID, Password: accName() + "-Bb2"})
+	_, err = users.Update(p.ctx, client.DBUserUpdate{ID: given.ID, Password: accPassword()})
 	p.find("user password changed: %s", p.took(err))
 	if err == nil {
 		_, err = users.WaitReady(p.ctx, given.ID)
@@ -566,7 +567,7 @@ func TestFindingMail(t *testing.T) {
 	later(p, p.c.MailUsers(), box.ID)
 	_, err = p.c.MailUsers().WaitReady(p.ctx, box.ID)
 	p.must(err)
-	_, err = p.c.MailUsers().Update(p.ctx, client.MailUserUpdate{ID: box.ID, Password: accName() + "-Aa1"})
+	_, err = p.c.MailUsers().Update(p.ctx, client.MailUserUpdate{ID: box.ID, Password: accPassword()})
 	p.find("mailbox password changed: %s", p.took(err))
 	if err == nil {
 		_, err = p.c.MailUsers().WaitReady(p.ctx, box.ID)

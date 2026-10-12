@@ -25,7 +25,8 @@ Nothing on it is a test object unless rule 2 says so.
    `printenv` or `set` unfiltered.
 2. **With the full-access token the live API is GET only. No exceptions.** No `POST` of any kind,
    to any path. Writes use the test token only, and only to objects whose name starts with `tfacc-`
-   and, for apps and sites, that belong to the sandbox shell user. The test token's write switches
+   and, for apps and sites, that belong to the sandbox shell user or to a shell user that is itself
+   a `tfacc-` test object. The test token's write switches
    are off except while a test of that kind runs (see "The test setup" in `PLAN.md`). The sandbox user and the base
    domain for tests are never modified or deleted; their names come from `OPALSTACK_TEST_OSUSER`
    and `OPALSTACK_TEST_DOMAIN_BASE` and are not written in this repository.

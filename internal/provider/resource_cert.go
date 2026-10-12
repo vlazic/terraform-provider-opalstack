@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"regexp"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -59,7 +60,7 @@ func (r *certResource) Schema(ctx context.Context, _ resource.SchemaRequest, res
 				MarkdownDescription: "The intermediate certificates, PEM encoded, if the certificate needs any.",
 				Optional:            true,
 				// The API reports none as null: an empty text would not survive the round trip.
-				Validators: []validator.String{stringvalidator.LengthAtLeast(1)},
+				Validators: []validator.String{stringvalidator.RegexMatches(regexp.MustCompile(`\S`), "must not be blank; leave it out instead")},
 			},
 			"key": schema.StringAttribute{
 				MarkdownDescription: "The private key, PEM encoded. It is stored in the Terraform state. The provider " +
@@ -129,9 +130,15 @@ func (r *certResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 // Update sends the certificate and its key together: one without the other
 // would be refused whenever either changed.
 func (r *certResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var m certModel
+	var m, state certModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	// Nothing is sent when only the timeouts changed.
+	if m.Name.Equal(state.Name) && m.Cert.Equal(state.Cert) && m.Key.Equal(state.Key) && m.Intermediates.Equal(state.Intermediates) {
+		resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 		return
 	}
 	updated, err := r.client.Certs().Update(ctx, client.CertUpdate{

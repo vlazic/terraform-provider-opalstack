@@ -79,7 +79,7 @@ func findOne[T any](ctx context.Context, k client.ReadKind[T], what string, matc
 }
 
 func plural(what string) string {
-	if strings.HasSuffix(what, "s") {
+	if strings.HasSuffix(what, "s") || strings.HasSuffix(what, "x") {
 		return what + "es"
 	}
 	return what + "s"

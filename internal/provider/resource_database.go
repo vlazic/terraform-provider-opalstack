@@ -135,6 +135,19 @@ func (r *dbUserResource) Create(ctx context.Context, req resource.CreateRequest,
 		resp.Diagnostics.AddError("The "+r.engine.name+" user did not become ready", err.Error())
 		return
 	}
+	// The create answers with a default_password even when it was sent one, so
+	// whether it honours a password is not established. An update is, so the
+	// password is set again that way.
+	if password := m.Password.ValueString(); password != "" {
+		if _, err := users.Update(ctx, client.DBUserUpdate{ID: created.ID, Password: password}); err != nil {
+			resp.Diagnostics.AddError("Cannot set the password of the "+r.engine.name+" user", err.Error())
+			return
+		}
+		if ready, err = users.WaitReady(ctx, created.ID); err != nil {
+			resp.Diagnostics.AddError("The "+r.engine.name+" user did not become ready", err.Error())
+			return
+		}
+	}
 	m.set(ready)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }
@@ -238,8 +251,8 @@ func (r *dbResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp 
 				Computed:      true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown(), stringplanmodifier.RequiresReplace()},
 			},
-			"user_ids":          idSetAttribute("UUIDs of the " + r.engine.name + " users that may read and write. Defaults to none."),
-			"readonly_user_ids": idSetAttribute("UUIDs of the " + r.engine.name + " users that may only read. Defaults to none."),
+			"user_ids":          idSetAttribute("UUIDs of the " + r.engine.name + " users that may read and write."),
+			"readonly_user_ids": idSetAttribute("UUIDs of the " + r.engine.name + " users that may only read."),
 			"timeouts":          timeouts.Attributes(ctx, timeouts.Opts{Create: true, Update: true, Delete: true}),
 		},
 	}
@@ -304,13 +317,19 @@ func (r *dbResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 }
 
 func (r *dbResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var m dbModel
+	var m, state dbModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	readWrite := stringsOf(ctx, m.UserIDs, &resp.Diagnostics)
 	readOnly := stringsOf(ctx, m.ReadOnlyUserIDs, &resp.Diagnostics)
 	ctx, cancel := withTimeout(ctx, m.Timeouts.Update, &resp.Diagnostics)
 	defer cancel()
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	// Nothing is sent when only the timeouts changed.
+	if m.UserIDs.Equal(state.UserIDs) && m.ReadOnlyUserIDs.Equal(state.ReadOnlyUserIDs) {
+		resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 		return
 	}
 

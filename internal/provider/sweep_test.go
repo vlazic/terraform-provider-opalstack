@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"errors"
 	"os"
 	"regexp"
 	"strings"
@@ -64,7 +63,8 @@ func TestSweep(t *testing.T) {
 }
 
 // sweep deletes the leftovers of one kind, as a subtest of its own. A kind the
-// token cannot list shows as skipped, so a narrowed token never passes for clean.
+// token cannot list fails the sweep: unseen is not clean. Listing needs only
+// the read switch of the kind, which the test token keeps on.
 func sweep[T any, K interface {
 	deleter
 	List(context.Context) ([]T, error)
@@ -72,9 +72,6 @@ func sweep[T any, K interface {
 	t.Helper()
 	t.Run(what, func(t *testing.T) {
 		all, err := k.List(ctx)
-		if errors.Is(err, client.ErrForbidden) {
-			t.Skipf("the token cannot list the %s", plural(what))
-		}
 		if err != nil {
 			t.Fatalf("cannot list the %s: %v", plural(what), err)
 		}

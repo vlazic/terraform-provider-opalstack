@@ -56,7 +56,9 @@ func (r *appResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp
 			"that a site routes requests to. Deleting an app deletes its directory, and the API silently drops " +
 			"every site route that pointed at it.\n\n" +
 			"An app made with an `installer_url` whose installer does not succeed ends in the state " +
-			"`INSTALL_FAILED`; the create then fails and the app stays in state, to be destroyed or replaced.",
+			"`INSTALL_FAILED`, which took the API some ten minutes to report when tested. The create then fails " +
+			"and the app stays in state, to be destroyed or replaced. Set `timeouts.create` above the default of " +
+			"ten minutes to see that state reported and not a timeout.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{MarkdownDescription: "UUID of the app.", Computed: true, PlanModifiers: keep},
 			"name": schema.StringAttribute{

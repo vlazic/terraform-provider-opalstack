@@ -29,8 +29,8 @@ resource "opalstack_address" "info" {
 
 ### Optional
 
-- `forwards` (Set of String) Addresses the mail is sent on to. Defaults to none.
-- `mailuser_ids` (Set of String) UUIDs of the mailboxes the mail is delivered to. Defaults to none.
+- `forwards` (Set of String) Addresses the mail is sent on to. Left out, the list is empty on a new object and is left as it is on an existing one.
+- `mailuser_ids` (Set of String) UUIDs of the mailboxes the mail is delivered to. Left out, the list is empty on a new object and is left as it is on an existing one.
 - `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 
 ### Read-Only

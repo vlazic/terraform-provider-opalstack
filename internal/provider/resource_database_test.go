@@ -96,7 +96,7 @@ func TestDatabaseResources(t *testing.T) {
 						},
 					},
 					{ // access taken away again: both lists are sent empty
-						Config:           config("tfacc-one", `password = "second-Password2"`+"\n  external = true", "tfacc-db", ""),
+						Config:           config("tfacc-one", `password = "second-Password2"`+"\n  external = true", "tfacc-db", "user_ids = []\n  readonly_user_ids = []"),
 						ConfigPlanChecks: accExpect(db, plancheck.ResourceActionUpdate),
 						Check: resource.ComposeAggregateTestCheckFunc(
 							resource.TestCheckResourceAttr(db, "user_ids.#", "0"),

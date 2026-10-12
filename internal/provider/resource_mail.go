@@ -111,6 +111,18 @@ func (r *mailUserResource) Create(ctx context.Context, req resource.CreateReques
 		resp.Diagnostics.AddError("The mailbox did not become ready", err.Error())
 		return
 	}
+	// As for a database user: whether the create honours a password is not
+	// established, so it is set again through an update.
+	if password := m.Password.ValueString(); password != "" {
+		if _, err := boxes.Update(ctx, client.MailUserUpdate{ID: created.ID, Password: password}); err != nil {
+			resp.Diagnostics.AddError("Cannot set the password of the mailbox", err.Error())
+			return
+		}
+		if ready, err = boxes.WaitReady(ctx, created.ID); err != nil {
+			resp.Diagnostics.AddError("The mailbox did not become ready", err.Error())
+			return
+		}
+	}
 	m.set(ready)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }
@@ -200,8 +212,8 @@ func (r *addressResource) Schema(ctx context.Context, _ resource.SchemaRequest, 
 				Required:      true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
-			"mailuser_ids": idSetAttribute("UUIDs of the mailboxes the mail is delivered to. Defaults to none."),
-			"forwards":     idSetAttribute("Addresses the mail is sent on to. Defaults to none."),
+			"mailuser_ids": idSetAttribute("UUIDs of the mailboxes the mail is delivered to."),
+			"forwards":     idSetAttribute("Addresses the mail is sent on to."),
 			"timeouts":     timeouts.Attributes(ctx, timeouts.Opts{Create: true, Update: true, Delete: true}),
 		},
 	}
@@ -262,14 +274,20 @@ func (r *addressResource) Read(ctx context.Context, req resource.ReadRequest, re
 }
 
 func (r *addressResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var m addressModel
+	var m, state addressModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	// Neither list is ever nil: the API requires forwards, and an update replaces both.
 	boxes := stringsOf(ctx, m.MailUserIDs, &resp.Diagnostics)
 	forwards := stringsOf(ctx, m.Forwards, &resp.Diagnostics)
 	ctx, cancel := withTimeout(ctx, m.Timeouts.Update, &resp.Diagnostics)
 	defer cancel()
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	// Nothing is sent when only the timeouts changed.
+	if m.MailUserIDs.Equal(state.MailUserIDs) && m.Forwards.Equal(state.Forwards) {
+		resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 		return
 	}
 

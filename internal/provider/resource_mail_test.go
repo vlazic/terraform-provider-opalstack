@@ -59,7 +59,7 @@ func TestMailResources(t *testing.T) {
 			{ResourceName: address, ImportState: true, ImportStateVerify: true},
 			{ResourceName: address, ImportState: true, ImportStateVerify: true, ImportStateId: "tfacc-info@example.com"},
 			{ // a password in place; the address forwards instead of delivering
-				Config: block + mailConfig(`password = "first-Password1"`, "tfacc-info@example.com", `forwards = ["someone@example.org"]`),
+				Config: block + mailConfig(`password = "first-Password1"`, "tfacc-info@example.com", `forwards = ["someone@example.org"]`+"\n  mailuser_ids = []"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
 					plancheck.ExpectResourceAction(box, plancheck.ResourceActionUpdate),
 					plancheck.ExpectResourceAction(address, plancheck.ResourceActionUpdate),
@@ -84,4 +84,42 @@ func TestMailResources(t *testing.T) {
 			},
 		},
 	})
+}
+
+// Adopting an address with a configuration that names neither list must not
+// empty them: a list the configuration leaves out stays as the API has it.
+func TestAddressImportKeepsUnmentionedLists(t *testing.T) {
+	f, factories, block := fakeProvider(t)
+	const id, address = "80000000-0000-0000-0000-000000000001", "opalstack_address.a"
+	f.seed("address", obj{"id": id, "source": "info@example.com", "destinations": []any{osuserID}, "forwards": []any{"someone@example.org"}})
+	config := block + `
+import {
+  to = opalstack_address.a
+  id = "info@example.com"
+}
+resource "opalstack_address" "a" { source = "info@example.com" }
+`
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(address, "mailuser_ids.#", "1"),
+					resource.TestCheckResourceAttr(address, "forwards.#", "1"),
+				),
+			},
+			{Config: block + `
+removed {
+  from = opalstack_address.a
+  lifecycle {
+    destroy = false
+  }
+}
+`},
+		},
+	})
+	if n := f.wrote("address/update"); n != 0 {
+		t.Errorf("%d updates were sent for an address that was only imported", n)
+	}
 }

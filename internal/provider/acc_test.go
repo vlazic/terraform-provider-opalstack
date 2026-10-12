@@ -7,6 +7,7 @@ import (
 	crand "crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -62,6 +63,16 @@ func accName() string {
 		b = append(b, chars[rand.IntN(len(chars))])
 	}
 	return string(b)
+}
+
+// accPassword is a throwaway password with some 160 bits of randomness, for a
+// login that exists on a real server while a test runs.
+func accPassword() string {
+	raw := make([]byte, 20)
+	if _, err := crand.Read(raw); err != nil {
+		panic(err)
+	}
+	return "Aa1-" + hex.EncodeToString(raw)
 }
 
 func accClient(t *testing.T) *client.Client {
@@ -501,7 +512,7 @@ resource "%[8]s" "d" {
 `, userType, sandbox, userName, userExtra, readerName, db, dbExtra, dbType)
 	}
 	access := "user_ids = [" + userType + ".u.id]\n  readonly_user_ids = [" + userType + ".reader.id]"
-	password := `password = "` + accName() + `-Aa1"`
+	password := `password = "` + accPassword() + `"`
 	noPassword := []string{"default_password", "password"}
 
 	resource.Test(t, resource.TestCase{
@@ -540,7 +551,7 @@ resource "%[8]s" "d" {
 			},
 			{Config: config(password+"\n  external = true", dbName, access), ConfigPlanChecks: accExpect(db, plancheck.ResourceActionNoop)},
 			{
-				Config:           config(password+"\n  external = true", dbName, ""),
+				Config:           config(password+"\n  external = true", dbName, "user_ids = []\n  readonly_user_ids = []"),
 				ConfigPlanChecks: accExpect(db, plancheck.ResourceActionUpdate),
 				Check:            resource.TestCheckResourceAttr(db, "user_ids.#", "0"),
 			},
@@ -580,7 +591,7 @@ resource "opalstack_address" "a" {
 `, servers.IMAP[0].Hostname, domain, boxName, boxExtra, local, addressExtra)
 	}
 	delivered := "mailuser_ids = [opalstack_mailuser.m.id]"
-	password := `password = "` + accName() + `-Aa1"`
+	password := `password = "` + accPassword() + `"`
 	noPassword := []string{"default_password", "password"}
 
 	resource.Test(t, resource.TestCase{
@@ -607,7 +618,7 @@ resource "opalstack_address" "a" {
 			{ResourceName: address, ImportState: true, ImportStateVerify: true},
 			{ResourceName: address, ImportState: true, ImportStateVerify: true, ImportStateId: local + "@" + domain},
 			{
-				Config: config(password, local, `forwards = ["tfacc-forward@example.com"]`),
+				Config: config(password, local, `forwards = ["tfacc-forward@example.com"]`+"\n  mailuser_ids = []"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
 					plancheck.ExpectResourceAction(box, plancheck.ResourceActionUpdate),
 					plancheck.ExpectResourceAction(address, plancheck.ResourceActionUpdate),
@@ -617,7 +628,7 @@ resource "opalstack_address" "a" {
 					resource.TestCheckResourceAttr(address, "forwards.#", "1"),
 				),
 			},
-			{Config: config(password, local, `forwards = ["tfacc-forward@example.com"]`), ConfigPlanChecks: accExpect(address, plancheck.ResourceActionNoop)},
+			{Config: config(password, local, `forwards = ["tfacc-forward@example.com"]`+"\n  mailuser_ids = []"), ConfigPlanChecks: accExpect(address, plancheck.ResourceActionNoop)},
 			{
 				Config:           config(password, other, delivered),
 				ConfigPlanChecks: accExpect(address, plancheck.ResourceActionDestroyBeforeCreate),

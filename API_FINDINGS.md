@@ -59,8 +59,8 @@ timeout diagnostic includes the last `state` seen.
 **A delete can be lost.** Sent while the create of an app is still pending, `POST /app/delete/`
 answers 200, the app reads `PENDING_DELETE`, and about 6 seconds later it is `READY`: the create
 finished and the delete is gone. A domain deleted in `PENDING_CREATE` did go (404 after 11 s).
-`WaitDeleted` therefore sends the delete again whenever a poll finds the object in any state but
-`PENDING_DELETE`.
+`WaitDeleted` therefore sends the delete again when a poll finds the object settled, ready or
+failed. Any other state is waited out, since a state the schema does not list may be a deletion.
 
 ### Deleting something that is still referred to
 
@@ -236,7 +236,8 @@ The two engines have the same shape under different paths (spec; `TestFindingMar
 
 - The answer to a user create carries `default_password`, whether or not a `password` was sent.
   No later answer does, and no answer carries `password`.
-- A password change through update is accepted (`PENDING_UPDATE`, then ready).
+- A password change through update is accepted (`PENDING_UPDATE`, then ready). Whether the create
+  honours a `password` is not established, so the provider sets it again through an update.
 - A database created without `charset` gets `utf8` on both engines.
 - An update with an empty array removes every user from that list.
 - A second database of a name in use answers 400

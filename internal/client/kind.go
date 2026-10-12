@@ -143,9 +143,9 @@ func (k Kind[T, C, U]) WaitReady(ctx context.Context, id string) (*T, error) {
 //
 // The API can lose a delete. Sent while the create of an app is still pending,
 // it is accepted and reported as PENDING_DELETE, and then the create finishes
-// and the app is READY. So when a poll finds the object settled again, in a
-// state that is not pending, the delete is sent once more. That cannot repeat
-// without end: a settled object that is sent a delete becomes PENDING_DELETE.
+// and the app is READY. So when a poll finds the object settled again, ready
+// or failed, the delete is sent once more. Any other state is waited out: the
+// API has states its schema does not list, and one of them may be a deletion.
 func (k Kind[T, C, U]) WaitDeleted(ctx context.Context, id string) error {
 	return k.c.poll(ctx, k.name+" "+id+" to be deleted", func() (bool, string, error) {
 		obj, err := k.Read(ctx, id)
@@ -156,17 +156,19 @@ func (k Kind[T, C, U]) WaitDeleted(ctx context.Context, id string) error {
 			return false, "", err
 		}
 		st := (*obj).status()
-		if st.pending() {
+		if !st.Ready && !st.Failed() {
 			return false, st.State, nil
 		}
-		err = k.Delete(ctx, id)
-		if errors.Is(err, ErrNotFound) {
-			return true, "", nil // it went between the read and the resend
+		resendErr := k.Delete(ctx, id)
+		if resendErr == nil {
+			return false, st.State + ", delete sent again", nil
 		}
-		if err != nil {
-			return false, "", fmt.Errorf("the delete was lost (the object is %s again) and could not be sent again: %w", st.State, err)
+		// The object may have gone between the read and the resend. With a
+		// safety prefix that shows as a refusal, so the object is asked again.
+		if _, err := k.Read(ctx, id); errors.Is(err, ErrNotFound) {
+			return true, "", nil
 		}
-		return false, st.State + ", delete sent again", nil
+		return false, "", fmt.Errorf("the delete was lost (the object is %s again) and could not be sent again: %w", st.State, resendErr)
 	})
 }
 

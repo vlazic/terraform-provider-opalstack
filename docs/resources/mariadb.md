@@ -32,9 +32,9 @@ resource "opalstack_mariadb" "blog" {
 ### Optional
 
 - `charset` (String) Character set, such as `utf8mb4` for MariaDB or `utf8` for PostgreSQL. Left out, the API chooses. Changing it replaces the database.
-- `readonly_user_ids` (Set of String) UUIDs of the MariaDB users that may only read. Defaults to none.
+- `readonly_user_ids` (Set of String) UUIDs of the MariaDB users that may only read. Left out, the list is empty on a new object and is left as it is on an existing one.
 - `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
-- `user_ids` (Set of String) UUIDs of the MariaDB users that may read and write. Defaults to none.
+- `user_ids` (Set of String) UUIDs of the MariaDB users that may read and write. Left out, the list is empty on a new object and is left as it is on an existing one.
 
 ### Read-Only
 

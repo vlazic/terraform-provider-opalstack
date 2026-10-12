@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
-	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setdefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/vlazic/terraform-provider-opalstack/internal/client"
@@ -154,27 +154,37 @@ func stringOrNull(s string) types.String {
 	return types.StringValue(s)
 }
 
-// idSetAttribute is a set of strings that is empty unless the configuration
-// fills it: the users of a database, the mailboxes of an address.
+// idSetAttribute is a set of ids or addresses the configuration may leave out:
+// the users of a database, the mailboxes of an address. Left out, it is empty
+// on a new object and stays as the API has it on an existing one, so adopting
+// an object never empties a list the configuration does not mention. To empty
+// one, set it to [].
 func idSetAttribute(description string) schema.SetAttribute {
 	return schema.SetAttribute{
-		MarkdownDescription: description,
+		MarkdownDescription: description + " Left out, the list is empty on a new object and is left as it is on an existing one.",
 		ElementType:         types.StringType,
 		Optional:            true,
 		Computed:            true,
-		Default:             setdefault.StaticValue(types.SetValueMust(types.StringType, []attr.Value{})),
+		PlanModifiers:       []planmodifier.Set{setplanmodifier.UseStateForUnknown()},
 	}
 }
 
 // stringsOf reads a set of strings. The result is never nil, so a request
-// carries an empty list where the configuration has none.
+// carries an empty list where the plan has none or does not know yet.
 func stringsOf(ctx context.Context, set types.Set, diags *diag.Diagnostics) []string {
 	out := []string{}
+	if set.IsNull() || set.IsUnknown() {
+		return out
+	}
 	diags.Append(set.ElementsAs(ctx, &out, false)...)
 	return out
 }
 
+// stringSet is never null: a list the API left out is an empty set.
 func stringSet(ctx context.Context, values []string, diags *diag.Diagnostics) types.Set {
+	if values == nil {
+		values = []string{}
+	}
 	set, d := types.SetValueFrom(ctx, types.StringType, values)
 	diags.Append(d...)
 	return set

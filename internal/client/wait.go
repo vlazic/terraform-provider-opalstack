@@ -10,9 +10,6 @@ import (
 // INSTALL_FAILED for an app whose installer did not succeed.
 func (s Status) Failed() bool { return strings.HasSuffix(s.State, "_FAILED") }
 
-// pending reports that the API is still working on the object.
-func (s Status) pending() bool { return strings.HasPrefix(s.State, "PENDING_") }
-
 // Status is the pair every managed object reports. The response types embed it.
 type Status struct {
 	State string `json:"state"`
