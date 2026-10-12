@@ -195,9 +195,9 @@ Consequences for the client:
   and extracts messages on a best-effort basis; it never assumes JSON.
 - 401 is its own error (`ErrUnauthorized`): a bad token must stop the run, not be retried and not
   be read as "object gone".
-- **UNVERIFIED:** what a 403 looks like. An object hidden by a token ACL may answer 403 or 404;
-  only a scoped token can tell, and the answer decides whether the provider can distinguish
-  "deleted" from "not allowed" at all.
+- A 403 is `{"detail":"You do not have permission to perform this action."}`, for a list and for
+  a read alike (probe 2026-10-12, see "What a scoped token sees"). An object outside the token's
+  ACL answers 403, not 404, so `ErrForbidden` is real and distinct from "deleted".
 
 ### Lists, headers, embed
 
@@ -242,6 +242,27 @@ against the API.
   switches **off** and object entries for the test objects only.
 - The ACL dialog shows the token's key in clear text. Do not read that dialog's text.
 
+### What a scoped token sees
+
+`scripts/probe-token.sh`, 2026-10-12, with a token whose only service switch is ip read and whose
+object entries are one shell user (read) and one domain (read and write). Output in
+`explore-out/probe-token.txt`.
+
+| Request | Answer |
+|---|---|
+| `server/list` | 200. There is no switch for server and none is needed |
+| `ip/list` | 200, the one address |
+| `osuser`, `domain`, `app`, `site`, `dnsrecord` `/list/` | 403 each |
+| `read` of the shell user and the domain named in the ACL | 200, with every field, `dkim_privkey` included |
+| `read` of a shell user, app, site and domain outside the ACL | 403 each |
+
+- **A list needs the service read switch.** It is refused outright, not filtered down to the
+  objects the token may read. Looking an object up by name, and importing by name, therefore need
+  service-level read on that kind; by id they work with an object entry alone.
+- An object entry does give a read by id, and nothing else was visible.
+- **UNVERIFIED:** what such a token gets for an id that does not exist, 403 or 404. If 403, a
+  wait for a deletion cannot see the object go, and `WaitDeleted` would fail with a scoped token.
+
 The open question this leaves is item 3 below: an object entry names an existing object, so
 nothing in this model obviously lets a token create one.
 
@@ -264,4 +285,5 @@ sandbox shell user and a scoped token exist.
 7. Which DNS records a site creates on its own, and whether they appear in `/dnsrecord/list/`.
 8. The 400 body for a validation error (duplicate name, bad enum, bad uuid).
 9. Whether a name can be reused immediately after its delete is queued, or only after teardown.
-10. What an ACL-hidden object answers on `read`: 403 or 404.
+10. Settled: an ACL-hidden object answers 403 on `read`. Still open: what a scoped token gets for
+    an id that does not exist.
