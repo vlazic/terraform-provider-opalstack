@@ -44,7 +44,12 @@ func (d *appDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, re
 			"type":          computedString("Type of the app, such as `STA` or `CUS`."),
 			"port":          schema.Int64Attribute{MarkdownDescription: "Port assigned to the app, for the types that listen on one.", Computed: true},
 			"installer_url": computedString("URL of the installer script the app was created with, if any."),
-			"json":          computedString("The per-type settings of the app, as a JSON object. Decode it with `jsondecode`."),
+			"json": schema.StringAttribute{
+				MarkdownDescription: "The per-type settings of the app, as a JSON object. Decode it with `jsondecode`. " +
+					"Sensitive, because an installer can leave credentials among them.",
+				Computed:  true,
+				Sensitive: true,
+			},
 		},
 	}
 }

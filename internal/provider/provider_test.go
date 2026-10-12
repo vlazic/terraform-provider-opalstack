@@ -86,6 +86,20 @@ func TestConfigure(t *testing.T) {
 		}
 	})
 
+	t.Run("safety_osuser_id without safety_prefix", func(t *testing.T) {
+		resp := configure(t, map[string]tftypes.Value{"token": str(token), "safety_osuser_id": str("11111111-1111-1111-1111-111111111111")})
+		if !resp.Diagnostics.HasError() {
+			t.Error("expected an error: on its own the exemption protects nothing")
+		}
+	})
+
+	t.Run("safety_osuser_id that is not a UUID", func(t *testing.T) {
+		resp := configure(t, map[string]tftypes.Value{"token": str(token), "safety_prefix": str("tfacc-"), "safety_osuser_id": str("sandbox")})
+		if !resp.Diagnostics.HasError() {
+			t.Error("expected an error")
+		}
+	})
+
 	t.Run("bad request_timeout", func(t *testing.T) {
 		for _, bad := range []string{"soon", "-5s", "0s"} {
 			resp := configure(t, map[string]tftypes.Value{"token": str(token), "request_timeout": str(bad)})

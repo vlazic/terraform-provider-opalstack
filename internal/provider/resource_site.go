@@ -79,9 +79,10 @@ func (r *siteResource) Schema(ctx context.Context, _ resource.SchemaRequest, res
 		MarkdownDescription: "A site: a set of domains whose requests are routed to apps. Everything about a site " +
 			"changes in place.",
 		Attributes: map[string]schema.Attribute{
-			"id":        schema.StringAttribute{MarkdownDescription: "UUID of the site.", Computed: true, PlanModifiers: keep},
-			"name":      schema.StringAttribute{MarkdownDescription: "Name of the site: lowercase letters, digits, `_` and `-`.", Required: true},
-			"server_id": schema.StringAttribute{MarkdownDescription: "UUID of the server the site is served from.", Computed: true, PlanModifiers: keep},
+			"id":   schema.StringAttribute{MarkdownDescription: "UUID of the site.", Computed: true, PlanModifiers: keep},
+			"name": schema.StringAttribute{MarkdownDescription: "Name of the site: lowercase letters, digits, `_` and `-`.", Required: true},
+			// Not kept from state: the server follows the site's apps and address, which change in place.
+			"server_id": schema.StringAttribute{MarkdownDescription: "UUID of the server the site is served from.", Computed: true},
 			"domain_ids": schema.SetAttribute{
 				MarkdownDescription: "UUIDs of the domains the site answers for.",
 				ElementType:         types.StringType,
@@ -218,8 +219,9 @@ func (r *siteResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 }
 
 func (r *siteResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var m siteModel
+	var m, state siteModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -237,10 +239,10 @@ func (r *siteResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		Name:          m.Name.ValueString(),
 		Domains:       domains,
 		Routes:        routes,
-		IP4:           nullableString(m.IP4ID),
-		IP6:           nullableString(m.IP6ID),
-		Cert:          nullableString(m.CertID),
-		PrimaryDomain: nullableString(m.PrimaryDomainID),
+		IP4:           changedString(m.IP4ID, state.IP4ID),
+		IP6:           changedString(m.IP6ID, state.IP6ID),
+		Cert:          changedString(m.CertID, state.CertID),
+		PrimaryDomain: changedString(m.PrimaryDomainID, state.PrimaryDomainID),
 		Redirect:      knownBool(m.Redirect),
 		GenerateLE:    knownBool(m.GenerateLE),
 		Disabled:      knownBool(m.Disabled),

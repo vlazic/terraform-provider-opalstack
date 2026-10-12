@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -83,5 +84,53 @@ resource "opalstack_app" "a" {
 				ConfigPlanChecks: expect(plancheck.ResourceActionDestroyBeforeCreate),
 			},
 		},
+	})
+}
+
+func TestAppResourceImportedInstaller(t *testing.T) {
+	f, factories, block := fakeProvider(t)
+	seedAccount(f)
+	const installed = "50000000-0000-0000-0000-000000000009"
+	f.seed("app", obj{"id": installed, "name": "tfacc-installed", "osuser": osuserID, "osuser_name": "sandbox", "server": serverID,
+		"type": "CUS", "port": 20001, "installer_url": "https://example.com/install.sh", "json": obj{}})
+	config := block + `
+resource "opalstack_app" "a" {
+  name      = "tfacc-installed"
+  osuser_id = "` + osuserID + `"
+  type      = "CUS"
+}
+`
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{Config: config, ResourceName: "opalstack_app.a", ImportState: true, ImportStateId: installed, ImportStatePersist: true},
+			{ // the configuration does not repeat the installer, and that is not a change
+				Config:           config,
+				ConfigPlanChecks: accExpect("opalstack_app.a", plancheck.ResourceActionNoop),
+				Check:            resource.TestCheckResourceAttr("opalstack_app.a", "installer_url", "https://example.com/install.sh"),
+			},
+		},
+	})
+	// The one delete is the test's own teardown. A replacement would show as a create.
+	if creates, deletes := f.wrote("app/create"), f.wrote("app/delete"); creates != 0 || deletes != 1 {
+		t.Errorf("%d creates and %d deletes were sent for an imported app, want 0 and 1", creates, deletes)
+	}
+}
+
+func TestAppResourceJSONMustBeAnObject(t *testing.T) {
+	_, factories, block := fakeProvider(t)
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{{
+			Config: block + `
+resource "opalstack_app" "a" {
+  name      = "tfacc-app"
+  osuser_id = "` + osuserID + `"
+  type      = "APA"
+  json      = "[1, 2]"
+}`,
+			PlanOnly:    true,
+			ExpectError: regexp.MustCompile(`must be a JSON object`),
+		}},
 	})
 }

@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/datasourcevalidator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -71,10 +72,17 @@ func findOne[T any](ctx context.Context, k client.ReadKind[T], what string, matc
 	all, err := k.List(ctx)
 	if err != nil {
 		var diags diag.Diagnostics
-		diags.AddError("Cannot list the "+what+"s", err.Error())
+		diags.AddError("Cannot list the "+plural(what), err.Error())
 		return nil, diags
 	}
 	return only(all, what, match)
+}
+
+func plural(what string) string {
+	if strings.HasSuffix(what, "s") {
+		return what + "es"
+	}
+	return what + "s"
 }
 
 // only returns the single item that match accepts. Names are not known to be
@@ -96,7 +104,7 @@ func only[T any](items []T, what string, match func(T) bool) (*T, diag.Diagnosti
 		diags.AddError("No "+what+" matches", "No "+what+" visible to this token matches the given attributes.")
 	default:
 		diags.AddError("More than one "+what+" matches",
-			fmt.Sprintf("%d %ss match the given attributes. Narrow the lookup, or look it up by id.", n, what))
+			fmt.Sprintf("%d %s match the given attributes. Narrow the lookup, or look it up by id.", n, plural(what)))
 	}
 	return nil, diags
 }

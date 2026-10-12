@@ -34,6 +34,7 @@ type fakeAPI struct {
 	objects map[string]obj // by id; "_kind" holds the kind
 	created int
 	writes  []string // "kind/verb", in order
+	bodies  []string // the request body of each write
 }
 
 // defaults are the fields the API fills in on create.
@@ -96,6 +97,18 @@ func (f *fakeAPI) wrote(kindVerb string) int {
 		}
 	}
 	return n
+}
+
+// lastBody is the body of the most recent write of that kind and verb.
+func (f *fakeAPI) lastBody(kindVerb string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := len(f.writes) - 1; i >= 0; i-- {
+		if f.writes[i] == kindVerb {
+			return f.bodies[i]
+		}
+	}
+	return ""
 }
 
 // fill adds what the API derives from a write: an app's server and shell user
@@ -192,6 +205,7 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	req := reqs[0]
 	f.writes = append(f.writes, kind+"/"+verb)
+	f.bodies = append(f.bodies, string(body))
 
 	if verb == "create" {
 		f.created++

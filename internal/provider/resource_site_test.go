@@ -3,6 +3,7 @@ package provider
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -82,6 +83,20 @@ resource "opalstack_site" "s" {
 					resource.TestCheckResourceAttr(addr, "routes.#", "2"),
 					resource.TestCheckResourceAttr(addr, "ip4_id", ipID),
 					resource.TestCheckResourceAttr(addr, "ip6_id", ip6ID), // left as it was
+					func(*terraform.State) error {
+						// A reference the plan does not change is not sent: sending it
+						// back would undo whatever the API attached in the meantime.
+						body := f.lastBody("site/update")
+						for _, field := range []string{`"ip6"`, `"cert"`, `"primary_domain"`} {
+							if strings.Contains(body, field) {
+								return fmt.Errorf("the update sent %s although it did not change: %s", field, body)
+							}
+						}
+						if !strings.Contains(body, `"ip4":"`+ipID+`"`) {
+							return fmt.Errorf("the update did not send the new ip4: %s", body)
+						}
+						return nil
+					},
 					resource.TestCheckResourceAttr(addr, "disabled", "true"),
 				),
 			},

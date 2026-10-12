@@ -34,7 +34,7 @@ output "blog_settings" {
 ### Read-Only
 
 - `installer_url` (String) URL of the installer script the app was created with, if any.
-- `json` (String) The per-type settings of the app, as a JSON object. Decode it with `jsondecode`.
+- `json` (String, Sensitive) The per-type settings of the app, as a JSON object. Decode it with `jsondecode`. Sensitive, because an installer can leave credentials among them.
 - `osuser_name` (String) Name of the shell user the app belongs to.
 - `port` (Number) Port assigned to the app, for the types that listen on one.
 - `server_id` (String) UUID of the server the app runs on.

@@ -211,7 +211,12 @@ func (k Kind[T, C, U]) guard(ctx context.Context, verb string, req any) error {
 	if id == "" && verb != "create" {
 		return refuse("the request has no id")
 	}
-	if name := field("name"); name != "" {
+	name := field("name")
+	if name == "" && verb == "create" && !k.nameless {
+		// The API would choose a name, and it would not carry the prefix.
+		return refuse("the request gives the new %s no name", k.name)
+	}
+	if name != "" {
 		if err := check("the requested name", name); err != nil {
 			return err
 		}

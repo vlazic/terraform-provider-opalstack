@@ -114,6 +114,18 @@ func (p *opalstackProvider) Configure(ctx context.Context, req provider.Configur
 		}
 	}
 
+	// On its own the exemption would look like protection and give none.
+	if id := cfg.SafetyOSUserID.ValueString(); id != "" {
+		if cfg.SafetyPrefix.ValueString() == "" {
+			resp.Diagnostics.AddAttributeError(path.Root("safety_osuser_id"), "safety_osuser_id needs safety_prefix",
+				"safety_osuser_id only names an exception to safety_prefix. Set safety_prefix as well.")
+		}
+		if !client.IsUUID(id) {
+			resp.Diagnostics.AddAttributeError(path.Root("safety_osuser_id"), "Invalid safety_osuser_id",
+				"Expected the UUID of a shell user.")
+		}
+	}
+
 	token := strings.TrimSpace(cfg.Token.ValueString())
 	if token == "" {
 		token = strings.TrimSpace(os.Getenv(tokenEnvVar))

@@ -3,19 +3,24 @@ package provider
 import (
 	"context"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/vlazic/terraform-provider-opalstack/internal/client"
 )
 
-// TestSweep deletes every object a failed acceptance test may have left on the
-// account: those whose name starts with accPrefix, and the DNS records of such
-// domains. It runs only with OPALSTACK_SWEEP=1 (make sweep).
+// sweepable is the shape of a name the acceptance tests make: the prefix, six
+// random characters, and then the end of the name or a separator. Anything else
+// that merely starts with the prefix is left alone.
+var sweepable = regexp.MustCompile(`^` + accPrefix + `[a-z0-9]{6}($|[.-])`)
+
+// TestSweep deletes what a failed acceptance test may have left on the account:
+// objects whose name has the shape of a test name, and for domains only those
+// under the base domain for tests. It runs only with OPALSTACK_SWEEP=1 (make sweep).
 //
-// The match is on the prefix and nothing else, and the client it uses is
-// configured with the same prefix, so a wrong match would be refused there too.
-// Order matters: a site before its apps and domains, an app before its shell user.
+// The client it uses is configured with the safety prefix as well. Order
+// matters: a site before its apps and domains, an app before its shell user.
 func TestSweep(t *testing.T) {
 	if os.Getenv("OPALSTACK_SWEEP") == "" {
 		t.Skip("set OPALSTACK_SWEEP=1 to delete leftover test objects")
@@ -23,11 +28,20 @@ func TestSweep(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*defaultTimeout)
 	defer cancel()
 	c := accClient(t)
+	base := "." + accEnv(t, "OPALSTACK_TEST_DOMAIN_BASE")
+	if base == "." {
+		t.Fatal("OPALSTACK_TEST_DOMAIN_BASE must be set to sweep")
+	}
 
 	sweep(ctx, t, "site", c.Sites(), func(s client.Site) (string, string) { return s.Name, s.ID })
 	sweep(ctx, t, "app", c.Apps(), func(a client.App) (string, string) { return a.Name, a.ID })
 	// Deleting a domain takes its DNS records with it.
-	sweep(ctx, t, "domain", c.Domains(), func(d client.Domain) (string, string) { return d.Name, d.ID })
+	sweep(ctx, t, "domain", c.Domains(), func(d client.Domain) (string, string) {
+		if !strings.HasSuffix(d.Name, base) {
+			return "", d.ID // not under the base domain: never swept
+		}
+		return d.Name, d.ID
+	})
 	sweep(ctx, t, "shell user", c.OSUsers(), func(u client.OSUser) (string, string) { return u.Name, u.ID })
 }
 
@@ -45,7 +59,7 @@ func sweep[T any, K interface {
 	swept := 0
 	for _, o := range all {
 		name, id := nameAndID(o)
-		if !strings.HasPrefix(name, accPrefix) {
+		if !sweepable.MatchString(name) {
 			continue
 		}
 		if err := k.Delete(ctx, id); err != nil {

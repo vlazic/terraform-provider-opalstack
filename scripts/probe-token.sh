@@ -50,8 +50,14 @@ readonly BODY="$TMP/body" REPORT="$TMP/report"
 get() {
   local code
   sleep 0.5
+  # Emptied first: after a failed request the previous answer must not be read as this one's.
+  : >"$BODY"
   code="$(curl -sS --max-time 60 -o "$BODY" -w '%{http_code}' \
-    -H "Accept: application/json" -K - "$API$1" <<<"header = \"Authorization: Token $TOKEN\"")"
+    -H "Accept: application/json" -K - "$API$1" <<<"header = \"Authorization: Token $TOKEN\"")" || code="000"
+  if [[ "$code" == "000" ]]; then
+    echo "FATAL: GET $1 got no answer; stopping" >&2
+    exit 1
+  fi
   if [[ "$code" == "429" || "$code" == 5* ]]; then
     echo "FATAL: GET $1 answered $code; stopping instead of sending more" >&2
     exit 1
@@ -73,7 +79,7 @@ body_summary() {
 read_one() {
   local code
   [[ "$3" =~ ^$UUID_RE$ ]] || { echo "FATAL: the id given for $1 is not a UUID" >&2; exit 1; }
-  code="$(get "/$2/read/$3")"
+  code="$(get "/$2/read/$3")" || exit 1
   printf 'read %-7s %-12s %s  %s\n' "$2" "$1" "$code" "$(body_summary "$code")"
 }
 
@@ -82,7 +88,7 @@ read_one() {
   echo
   echo "lists: kind, status, count, how many of the two sandbox ids are in it"
   for kind in "${KINDS[@]}"; do
-    code="$(get "/$kind/list/")"
+    code="$(get "/$kind/list/")" || exit 1
     if [[ "$code" == 2* ]]; then
       summary="$(jq -r --arg a "$OPALSTACK_TEST_OSUSER_ID" --arg b "$OPALSTACK_TEST_DOMAIN_ID" \
         '"count \(length)  sandbox ids \([.[] | select(.id == $a or .id == $b)] | length)"' "$BODY" 2>/dev/null \
@@ -98,7 +104,10 @@ read_one() {
   read_one "in the ACL" osuser "$OPALSTACK_TEST_OSUSER_ID"
   read_one "in the ACL" domain "$OPALSTACK_TEST_DOMAIN_ID"
   for pair in ${OPALSTACK_PROBE_OUTSIDE:-}; do
-    read_one "outside" "${pair%%=*}" "${pair#*=}"
+    kind="${pair%%=*}"
+    # Only the kinds above: the kind goes into the request path.
+    [[ " ${KINDS[*]} " == *" $kind "* ]] || { echo "FATAL: $kind is not a kind this script reads" >&2; exit 1; }
+    read_one "outside" "$kind" "${pair#*=}"
   done
 } >"$REPORT"
 

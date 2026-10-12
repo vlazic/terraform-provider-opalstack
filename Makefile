@@ -22,7 +22,7 @@ install: ## Install the provider binary into GOBIN, for dev_overrides
 TERRAFORM := $(shell asdf which terraform 2>/dev/null || command -v terraform)
 
 test: ## Unit tests. Offline: no request leaves the machine
-	TF_ACC_TERRAFORM_PATH=$(TERRAFORM) CHECKPOINT_DISABLE=1 go test -race -count=1 ./...
+	TF_ACC= OPALSTACK_SWEEP= TF_ACC_TERRAFORM_PATH=$(TERRAFORM) CHECKPOINT_DISABLE=1 go test -race -count=1 ./...
 
 testacc: ## Acceptance tests against the real account. Needs OPALSTACK_TOKEN and the sandbox variables; RUN=TestAccName picks one
 	TF_ACC=1 TF_ACC_TERRAFORM_PATH=$(TERRAFORM) CHECKPOINT_DISABLE=1 go test ./internal/provider -v -p 1 -count=1 -timeout 60m -run '$(or $(RUN),^TestAcc)'

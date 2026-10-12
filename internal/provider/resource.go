@@ -129,11 +129,12 @@ func knownString(v types.String) *string {
 	return v.ValueStringPointer()
 }
 
-// nullableString is for a field an update can clear: an unknown value leaves
-// the field as it is, a null one clears it.
-func nullableString(v types.String) client.Nullable[string] {
-	if v.IsUnknown() {
+// changedString is for a reference an update can set or clear. It is sent only
+// when the plan differs from the state: sending an unchanged value back would
+// overwrite whatever the API attached in the meantime, a certificate for one.
+func changedString(plan, state types.String) client.Nullable[string] {
+	if plan.IsUnknown() || plan.Equal(state) {
 		return client.Nullable[string]{}
 	}
-	return client.FromPtr(v.ValueStringPointer())
+	return client.FromPtr(plan.ValueStringPointer())
 }

@@ -34,7 +34,7 @@ resource "opalstack_app" "blog" {
 
 ### Optional
 
-- `installer_url` (String) URL of an installer script to run when the app is created. Changing it replaces the app.
+- `installer_url` (String) URL of an installer script to run when the app is created. Changing it replaces the app. Leaving it out keeps whatever the app was created with, so an imported app is not replaced.
 - `json` (String) Per-type settings as a JSON object, for example `jsonencode({ php_version = 83 })`. Only the keys given here are managed: the API adds settings of its own, and those are left alone and not shown. The `opalstack_app` data source shows all of them.
 - `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 

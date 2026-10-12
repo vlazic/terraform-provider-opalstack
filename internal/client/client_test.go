@@ -533,6 +533,54 @@ func TestSafetyPrefix(t *testing.T) {
 		}
 	})
 
+	t.Run("a create that leaves the name to the API is refused", func(t *testing.T) {
+		f, c := setup(t)
+		f.on("GET", "/domain/read/"+idB, ok(`{"id":"`+idB+`","name":"tfacc-a.example.com"}`))
+		_, err := c.Sites().Create(context.Background(), SiteCreate{Domains: []string{idB}})
+		if !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("err = %v, want ErrSafetyPrefix", err)
+		}
+		if n := f.count("", ""); n != 0 {
+			t.Errorf("%d requests were sent", n)
+		}
+	})
+
+	t.Run("a site's primary domain is a reference too, and each object is read once", func(t *testing.T) {
+		f, c := setup(t)
+		f.on("GET", "/domain/read/"+idB, ok(`{"id":"`+idB+`","name":"tfacc-a.example.com"}`))
+		f.on("GET", "/domain/read/"+idC, ok(`{"id":"`+idC+`","name":"www.example.com"}`))
+		f.on("GET", "/app/read/"+idB, ok(`{"id":"`+idB+`","name":"tfacc-app"}`))
+		primary := idC
+		_, err := c.Sites().Create(context.Background(), SiteCreate{
+			Name: "tfacc-site", Domains: []string{idB}, PrimaryDomain: &primary,
+			Routes: []Route{{App: idB, URI: "/"}, {App: idB, URI: "/x/"}},
+		})
+		if !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("err = %v, want ErrSafetyPrefix", err)
+		}
+		if n := posts(f); n != 0 {
+			t.Errorf("%d POST requests were sent", n)
+		}
+
+		f, c = setup(t)
+		f.on("GET", "/domain/read/"+idB, ok(`{"id":"`+idB+`","name":"tfacc-a.example.com"}`))
+		f.on("GET", "/app/read/"+idB, ok(`{"id":"`+idB+`","name":"tfacc-app"}`))
+		f.on("POST", "/site/create/", ok(`[{"id":"`+idA+`","name":"tfacc-site"}]`))
+		primary = idB
+		if _, err := c.Sites().Create(context.Background(), SiteCreate{
+			Name: "tfacc-site", Domains: []string{idB}, PrimaryDomain: &primary,
+			Routes: []Route{{App: idB, URI: "/"}, {App: idB, URI: "/x/"}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if n := f.count("GET", "/app/read/"+idB); n != 1 {
+			t.Errorf("the app was read %d times, want 1", n)
+		}
+		if n := f.count("GET", "/domain/read/"+idB); n != 1 {
+			t.Errorf("the domain was read %d times, want 1", n)
+		}
+	})
+
 	t.Run("the sandbox user itself is never written", func(t *testing.T) {
 		f, c := setup(t)
 		c.cfg.SafetyOSUserID = idB

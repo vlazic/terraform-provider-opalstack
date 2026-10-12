@@ -76,7 +76,10 @@ func (r *appResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp
 				Validators: []validator.String{stringvalidator.OneOf("STA", "NPF", "APA", "CUS", "SLS", "SLP", "SLN", "SVN", "DAV")},
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplaceIf(
 					func(_ context.Context, req planmodifier.StringRequest, resp *stringplanmodifier.RequiresReplaceIfFuncResponse) {
-						resp.RequiresReplace = req.StateValue.ValueString() == portType || req.PlanValue.ValueString() == portType
+						// An unknown type may turn out to be the port type, and a plan may not
+						// change from update to replace once the value is known.
+						resp.RequiresReplace = req.PlanValue.IsUnknown() ||
+							req.StateValue.ValueString() == portType || req.PlanValue.ValueString() == portType
 					},
 					"Changing the type to or from CUS replaces the app.", "Changing the type to or from `CUS` replaces the app.",
 				)},
@@ -87,9 +90,11 @@ func (r *appResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp
 				PlanModifiers:       []planmodifier.Int64{int64planmodifier.UseStateForUnknown()},
 			},
 			"installer_url": schema.StringAttribute{
-				MarkdownDescription: "URL of an installer script to run when the app is created. Changing it replaces the app.",
-				Optional:            true,
-				PlanModifiers:       replace,
+				MarkdownDescription: "URL of an installer script to run when the app is created. Changing it replaces " +
+					"the app. Leaving it out keeps whatever the app was created with, so an imported app is not replaced.",
+				Optional:      true,
+				Computed:      true,
+				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown(), stringplanmodifier.RequiresReplace()},
 			},
 			"json": schema.StringAttribute{
 				CustomType: jsontypes.NormalizedType{},
@@ -97,10 +102,28 @@ func (r *appResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp
 					"Only the keys given here are managed: the API adds settings of its own, and those are left alone " +
 					"and not shown. The `opalstack_app` data source shows all of them.",
 				Optional:      true,
+				Validators:    []validator.String{jsonObject{}},
 				PlanModifiers: []planmodifier.String{sameJSON{}},
 			},
 			"timeouts": timeouts.Attributes(ctx, timeouts.Opts{Create: true, Update: true, Delete: true}),
 		},
+	}
+}
+
+// jsonObject rejects JSON that is not an object at plan time, instead of in the
+// middle of an apply.
+type jsonObject struct{}
+
+func (jsonObject) Description(context.Context) string               { return "Must be a JSON object." }
+func (v jsonObject) MarkdownDescription(ctx context.Context) string { return v.Description(ctx) }
+
+func (jsonObject) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	var object map[string]any
+	if err := json.Unmarshal([]byte(req.ConfigValue.ValueString()), &object); err != nil || object == nil {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid json", "The json attribute must be a JSON object, such as jsonencode({ php_version = 83 }).")
 	}
 }
 
@@ -194,7 +217,7 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		Name:         m.Name.ValueString(),
 		OSUser:       m.OSUserID.ValueString(),
 		Type:         m.Type.ValueString(),
-		InstallerURL: m.InstallerURL.ValueStringPointer(),
+		InstallerURL: knownString(m.InstallerURL),
 		JSON:         settings,
 	})
 	if err != nil {

@@ -30,10 +30,11 @@ func (d *ipDataSource) Metadata(_ context.Context, req datasource.MetadataReques
 
 func (d *ipDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Looks up an IP address of a server, for use as the `ip4_id` or `ip6_id` of a site.",
+		MarkdownDescription: "Looks up an IP address, for use as the `ip4_id` or `ip6_id` of a site: by `id`, or by " +
+			"`server_id` with `type` and `primary`.",
 		Attributes: map[string]schema.Attribute{
-			"id":        computedString("UUID of the address."),
-			"server_id": schema.StringAttribute{MarkdownDescription: "UUID of the server the address belongs to.", Required: true},
+			"id":        lookupAttribute("UUID of the address."),
+			"server_id": lookupAttribute("UUID of the server the address belongs to."),
 			"type": schema.StringAttribute{
 				MarkdownDescription: "Address family, `4` or `6`. Defaults to `4`.",
 				Optional:            true,
@@ -50,6 +51,10 @@ func (d *ipDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, res
 	}
 }
 
+func (d *ipDataSource) ConfigValidators(context.Context) []datasource.ConfigValidator {
+	return idOr("server_id")
+}
+
 func (d *ipDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	var m ipModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &m)...)
@@ -64,7 +69,7 @@ func (d *ipDataSource) Read(ctx context.Context, req datasource.ReadRequest, res
 		primary = m.Primary.ValueBool()
 	}
 
-	ip, diags := findOne(ctx, d.client.IPs(), "IP address", func(ip client.IP) bool {
+	ip, diags := find(ctx, d.client.IPs(), "IP address", m.ID, func(ip client.IP) bool {
 		return ip.Server == m.ServerID.ValueString() && ip.Type == family && ip.Primary == primary
 	})
 	resp.Diagnostics.Append(diags...)
@@ -73,6 +78,7 @@ func (d *ipDataSource) Read(ctx context.Context, req datasource.ReadRequest, res
 	}
 
 	m.ID = types.StringValue(ip.ID)
+	m.ServerID = types.StringValue(ip.Server)
 	m.Type = types.StringValue(ip.Type)
 	m.Primary = types.BoolValue(ip.Primary)
 	m.IP = types.StringValue(ip.IP)
