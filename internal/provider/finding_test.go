@@ -31,6 +31,8 @@ type probe struct {
 	base   string // the base domain for tests
 	osuser string // id of the sandbox shell user
 	mask   *strings.Replacer
+	// answered is the redacted body of the last answer to a create or an update.
+	answered string
 }
 
 func newProbe(t *testing.T) *probe {
@@ -39,7 +41,14 @@ func newProbe(t *testing.T) *probe {
 		t.Skip("a probe of the real API: set TF_ACC=1")
 	}
 	p := &probe{t: t, base: accEnv(t, "OPALSTACK_TEST_DOMAIN_BASE"), osuser: accEnv(t, "OPALSTACK_TEST_OSUSER_ID")}
-	c, err := client.New(client.Config{Token: accEnv(t, tokenEnvVar), SafetyPrefix: accPrefix, SafetyOSUserID: p.osuser})
+	c, err := client.New(client.Config{
+		Token: accEnv(t, tokenEnvVar), SafetyPrefix: accPrefix, SafetyOSUserID: p.osuser,
+		Log: func(_ context.Context, _ string, fields map[string]any) {
+			if method, _ := fields["method"].(string); method == "POST" {
+				p.answered, _ = fields["response"].(string)
+			}
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,4 +482,195 @@ func TestFindingDeleteWhilePending(t *testing.T) {
 		}
 		return now.State, nil
 	})
+}
+
+// took describes how a create or update went, with the redacted answer when it
+// was accepted: the spec does not say which fields come back.
+func (p *probe) took(err error) string {
+	if err != nil {
+		return answer(err)
+	}
+	body := p.answered
+	if len(body) > 700 {
+		body = body[:700] + "..."
+	}
+	return "accepted " + body
+}
+
+// What do database users and databases answer? MariaDB and PostgreSQL share a shape.
+func TestFindingMaria(t *testing.T) {
+	p := newProbe(t)
+	probeDatabases(p, p.c.MariaUsers(), p.c.MariaDBs())
+}
+
+func TestFindingPsql(t *testing.T) {
+	p := newProbe(t)
+	probeDatabases(p, p.c.PsqlUsers(), p.c.PsqlDBs())
+}
+
+func probeDatabases(p *probe, users client.DBUserKind, dbs client.DBKind) {
+	sandbox, err := p.c.OSUsers().Read(p.ctx, p.osuser)
+	p.must(err)
+
+	plain, err := users.Create(p.ctx, client.DBUserCreate{Server: sandbox.Server, Name: accName()})
+	p.find("user created without a password: %s", p.took(err))
+	p.must(err)
+	later(p, users, plain.ID)
+	_, err = users.WaitReady(p.ctx, plain.ID)
+	p.must(err)
+
+	given, err := users.Create(p.ctx, client.DBUserCreate{Server: sandbox.Server, Name: accName(), Password: accName() + "-Aa1"})
+	p.find("user created with a password: %s", p.took(err))
+	p.must(err)
+	later(p, users, given.ID)
+	_, err = users.WaitReady(p.ctx, given.ID)
+	p.must(err)
+
+	_, err = users.Update(p.ctx, client.DBUserUpdate{ID: given.ID, Password: accName() + "-Bb2"})
+	p.find("user password changed: %s", p.took(err))
+	if err == nil {
+		_, err = users.WaitReady(p.ctx, given.ID)
+		p.must(err)
+	}
+
+	db, err := dbs.Create(p.ctx, client.DBCreate{Name: accName(), Server: sandbox.Server, Users: []string{plain.ID}, ReadOnlyUsers: []string{given.ID}})
+	p.find("database created with one user of each kind: %s", p.took(err))
+	p.must(err)
+	later(p, dbs, db.ID)
+	_, err = dbs.WaitReady(p.ctx, db.ID)
+	p.must(err)
+
+	_, err = dbs.Update(p.ctx, client.DBUpdate{ID: db.ID, Users: []string{plain.ID, given.ID}, ReadOnlyUsers: []string{}})
+	p.find("database users changed, read-only list emptied: %s", p.took(err))
+	if err == nil {
+		_, err = dbs.WaitReady(p.ctx, db.ID)
+		p.must(err)
+	}
+	if dup, err := dbs.Create(p.ctx, client.DBCreate{Name: db.Name, Server: sandbox.Server}); err == nil {
+		later(p, dbs, dup.ID)
+		p.find("second database of the same name: accepted")
+	} else {
+		p.find("second database of the same name: %s", answer(err))
+	}
+	p.find("delete a user a database still names: %s", answer(users.Delete(p.ctx, plain.ID)))
+}
+
+// What do mailboxes and addresses answer?
+func TestFindingMail(t *testing.T) {
+	p := newProbe(t)
+	servers, err := p.c.ListServers(p.ctx)
+	p.must(err)
+	if len(servers.IMAP) == 0 {
+		t.Fatal("the account has no IMAP server")
+	}
+	p.find("the account has %d IMAP and %d SMTP servers", len(servers.IMAP), len(servers.SMTP))
+	d := p.domain()
+
+	box, err := p.c.MailUsers().Create(p.ctx, client.MailUserCreate{IMAPServer: servers.IMAP[0].ID, Name: accName()})
+	p.find("mailbox created without a password: %s", p.took(err))
+	p.must(err)
+	later(p, p.c.MailUsers(), box.ID)
+	_, err = p.c.MailUsers().WaitReady(p.ctx, box.ID)
+	p.must(err)
+	_, err = p.c.MailUsers().Update(p.ctx, client.MailUserUpdate{ID: box.ID, Password: accName() + "-Aa1"})
+	p.find("mailbox password changed: %s", p.took(err))
+	if err == nil {
+		_, err = p.c.MailUsers().WaitReady(p.ctx, box.ID)
+		p.must(err)
+	}
+
+	source := accName() + "@" + d.Name
+	addr, err := p.c.Addresses().Create(p.ctx, client.AddressCreate{Source: source, Destinations: []string{box.ID}, Forwards: []string{}})
+	p.find("address created with one mailbox: %s", p.took(err))
+	p.must(err)
+	later(p, p.c.Addresses(), addr.ID)
+	_, err = p.c.Addresses().WaitReady(p.ctx, addr.ID)
+	p.must(err)
+
+	_, err = p.c.Addresses().Update(p.ctx, client.AddressUpdate{ID: addr.ID, Destinations: []string{}, Forwards: []string{"tfacc-forward@example.com"}})
+	p.find("address changed to forward only: %s", p.took(err))
+	if err == nil {
+		_, err = p.c.Addresses().WaitReady(p.ctx, addr.ID)
+		p.must(err)
+	}
+	_, err = p.c.Addresses().Update(p.ctx, client.AddressUpdate{ID: addr.ID, Destinations: []string{}, Forwards: []string{}})
+	p.find("address with neither mailbox nor forward: %s", p.took(err))
+	if err == nil {
+		_, err = p.c.Addresses().WaitReady(p.ctx, addr.ID)
+		p.must(err)
+	}
+	_, err = p.c.Addresses().Update(p.ctx, client.AddressUpdate{ID: addr.ID, Destinations: []string{box.ID}, Forwards: []string{}})
+	p.must(err)
+	_, err = p.c.Addresses().WaitReady(p.ctx, addr.ID)
+	p.must(err)
+
+	if dup, err := p.c.Addresses().Create(p.ctx, client.AddressCreate{Source: source, Destinations: []string{box.ID}, Forwards: []string{}}); err == nil {
+		later(p, p.c.Addresses(), dup.ID)
+		p.find("second address with the same source: accepted")
+	} else {
+		p.find("second address with the same source: %s", answer(err))
+	}
+	other, err := p.c.Addresses().Create(p.ctx, client.AddressCreate{Source: accName() + "@tfacc-no-such-domain.example.com", Destinations: []string{box.ID}, Forwards: []string{}})
+	if err == nil {
+		later(p, p.c.Addresses(), other.ID)
+	}
+	p.find("address on a domain the account does not have: %s", p.took(err))
+
+	if err := p.c.MailUsers().Delete(p.ctx, box.ID); err != nil {
+		p.find("delete a mailbox an address delivers to: %s", answer(err))
+		return
+	}
+	waitErr := p.c.MailUsers().WaitDeleted(p.ctx, box.ID)
+	now, readErr := p.c.Addresses().Read(p.ctx, addr.ID)
+	left := answer(readErr)
+	if readErr == nil {
+		left = fmt.Sprintf("state=%s destinations=%d", now.State, len(now.Destinations))
+	}
+	p.find("delete a mailbox an address delivers to: accepted; mailbox gone: %s; the address afterwards: %s", answer(waitErr), left)
+}
+
+// What does a certificate answer, and what does a site do with one?
+func TestFindingCert(t *testing.T) {
+	p := newProbe(t)
+	d, a := p.domain(), p.app(p.osuser)
+	certPEM, keyPEM := accSelfSigned(t, d.Name)
+
+	cert, err := p.c.Certs().Create(p.ctx, client.CertCreate{Name: accName(), Cert: certPEM, Key: keyPEM})
+	body := p.took(err)
+	if i := strings.Index(body, "-----BEGIN"); i >= 0 {
+		body = body[:i] + "<pem>..."
+	}
+	p.find("certificate created: %s", body)
+	p.must(err)
+	later(p, p.c.Certs(), cert.ID)
+	read, err := p.c.Certs().Read(p.ctx, cert.ID)
+	p.must(err)
+	p.find("certificate as read: state=%v ready=%v listed_domains=%d letsencrypt=%v exp_date set=%v sha256 set=%v intermediates null=%v",
+		read.State != nil, read.Ready != nil, len(read.ListedDomains), read.LetsEncrypt, read.ExpDate != "", read.SHA256 != "", read.Intermediates == nil)
+
+	_, err = p.c.Certs().Create(p.ctx, client.CertCreate{Name: accName(), Cert: certPEM, Key: "not a key"})
+	p.find("certificate with a key that is no key: %s", answer(err))
+	if dup, err := p.c.Certs().Create(p.ctx, client.CertCreate{Name: cert.Name, Cert: certPEM, Key: keyPEM}); err == nil {
+		later(p, p.c.Certs(), dup.ID)
+		p.find("second certificate of the same name: accepted")
+	} else {
+		p.find("second certificate of the same name: %s", answer(err))
+	}
+
+	newCert, newKey := accSelfSigned(t, d.Name)
+	_, err = p.c.Certs().Update(p.ctx, client.CertUpdate{ID: cert.ID, Cert: newCert, Key: newKey})
+	p.find("certificate and key replaced in place: %s", answer(err))
+	_, err = p.c.Certs().Update(p.ctx, client.CertUpdate{ID: cert.ID, Name: accName()})
+	p.find("certificate renamed: %s", answer(err))
+
+	s := p.site(client.SiteCreate{Domains: []string{d.ID}, Routes: []client.Route{{App: a.ID, URI: "/"}}, Cert: &cert.ID})
+	p.find("site created with the certificate: cert set=%v generate_le=%v", s.Cert != nil && *s.Cert == cert.ID, s.GenerateLE)
+	if err := p.c.Certs().Delete(p.ctx, cert.ID); err != nil {
+		p.find("delete a certificate a site serves: %s", answer(err))
+		return
+	}
+	waitErr := p.c.Certs().WaitDeleted(p.ctx, cert.ID)
+	now, err := p.c.Sites().Read(p.ctx, s.ID)
+	p.must(err)
+	p.find("delete a certificate a site serves: accepted; certificate gone: %s; the site's cert afterwards set=%v", answer(waitErr), now.Cert != nil)
 }

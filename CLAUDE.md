@@ -25,7 +25,8 @@ Nothing on it is a test object unless rule 2 says so.
    `printenv` or `set` unfiltered.
 2. **With the full-access token the live API is GET only. No exceptions.** No `POST` of any kind,
    to any path. Writes use the test token only, and only to objects whose name starts with `tfacc-`
-   and, for apps and sites, that belong to the sandbox shell user. The sandbox user and the base
+   and, for apps and sites, that belong to the sandbox shell user. The test token's write switches
+   are off except while a test of that kind runs (see "The test setup" in `PLAN.md`). The sandbox user and the base
    domain for tests are never modified or deleted; their names come from `OPALSTACK_TEST_OSUSER`
    and `OPALSTACK_TEST_DOMAIN_BASE` and are not written in this repository.
 3. Never call `/login/`, `/register/`, `/payment/*`, `/token/*` or `/tokenacl/*`. The provider never
@@ -41,7 +42,10 @@ Nothing on it is a test object unless rule 2 says so.
 ## Conventions
 
 - Resources: `opalstack_osuser`, `opalstack_domain`, `opalstack_app`, `opalstack_site`,
-  `opalstack_dnsrecord`. Data sources share those names except `opalstack_dnsrecord`, plus `opalstack_server` and `opalstack_ip`.
+  `opalstack_dnsrecord`, `opalstack_cert`, `opalstack_mariauser`, `opalstack_mariadb`,
+  `opalstack_psqluser`, `opalstack_psqldb`, `opalstack_mailuser`, `opalstack_address`. Data
+  sources: `opalstack_server`, `opalstack_ip`, `opalstack_osuser`, `opalstack_domain`,
+  `opalstack_app`, `opalstack_site`.
   Attributes that reference another object end in `_id`.
 - `internal/client` imports nothing from Terraform. It sends one-element JSON arrays for create and
   update, `[{"id": ...}]` for delete, and waits for `ready == true`.
@@ -58,7 +62,8 @@ Nothing on it is a test object unless rule 2 says so.
 ```sh
 make check      # lint, offline tests and a secret scan. Before every commit; stage first
 make test       # unit tests and the fake-API provider tests, offline
-make testacc    # acceptance tests against the real account, test token only. RUN=TestAccSite picks one
+make testacc    # acceptance tests against the real account, test token only. RUN=TestAccSite picks one.
+                # RUN=^TestFinding runs the probes of API behaviour instead
 make sweep      # delete tfacc- objects a failed acceptance run left behind
 make docs       # regenerate docs/ from the schemas and examples/
 make install    # go install, for dev_overrides

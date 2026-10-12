@@ -27,7 +27,11 @@ Written to be read with no other context. Facts about the API are in
   open (`make testacc RUN=^TestFinding`). Two changed the client: `WaitReady` stops on a `_FAILED`
   state, and `WaitDeleted` sends a lost delete again.
 - The live schema was fetched again on 2026-10-12 and is identical to `spec/openapi.yaml`.
-- `make sweep` deletes leftover test objects. `make docs` regenerates `docs/` from the schemas
+- Seven more resources, each probed first, tested against the fake API and then against the real
+  account: `opalstack_mariauser`, `opalstack_mariadb`, `opalstack_psqluser`, `opalstack_psqldb`
+  (one implementation for both engines, `resource_database.go`), `opalstack_mailuser`,
+  `opalstack_address` and `opalstack_cert`.
+- `make sweep` deletes leftover test objects. It skips a kind the token cannot list. `make docs` regenerates `docs/` from the schemas
   and `examples/`.
 
 ## Decisions that differ from the first design notes
@@ -58,6 +62,12 @@ Written to be read with no other context. Facts about the API are in
   assigns no port.
 - **A site's domains and routes are sets**, a site needs `ip4_id` or `ip6_id`, and a route `uri`
   must end with `/`, because the API appends one.
+- **Database users and mailboxes take an optional `password`**, changed in place and never read
+  back; without one the API's `default_password` is kept, as for a shell user.
+- **`opalstack_cert` never waits**: a certificate has no state. Its key lives in the Terraform
+  state, and is never read from the API although every read returns it.
+- **An address is judged by its `source` for the safety prefix**, through a per-kind name field on
+  `ReadKind`, and by the mailboxes it delivers to.
 - **`opalstack_osuser` sets no password.** The API chooses one and reports it once, as
   `default_password`.
 - **The framework's pointer getters turn an unknown value into a zero.** Requests are built with
@@ -87,10 +97,10 @@ Written to be read with no other context. Facts about the API are in
 
 ## Next
 
-1. Not started: mail (address, mailuser), databases (mariadb, psqldb and their users),
-   certificates. `osvar` and a settable shell user password are not planned.
-2. A release: `.goreleaser.yml` exists and has never been run.
-3. The open items at the end of `API_FINDINGS.md`.
+1. A release: `.goreleaser.yml` exists and has never been run.
+2. The open items at the end of `API_FINDINGS.md`.
+3. Not planned: `osvar`, a settable shell user password, a mailbox's filter rules and
+   autoresponder, quarantined mail, notices.
 
 ## Before this repository is ever made public
 

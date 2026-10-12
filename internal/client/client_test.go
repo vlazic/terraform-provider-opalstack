@@ -538,6 +538,44 @@ func TestSafetyPrefix(t *testing.T) {
 		}
 	})
 
+	t.Run("an address is judged by its source and by its mailboxes", func(t *testing.T) {
+		f, c := setup(t)
+		f.on("GET", "/mailuser/read/"+idB, ok(`{"id":"`+idB+`","name":"production_box"}`))
+		f.on("GET", "/mailuser/read/"+idC, ok(`{"id":"`+idC+`","name":"tfacc-box"}`))
+		f.on("GET", "/address/read/"+idA, ok(`{"id":"`+idA+`","source":"info@example.com","destinations":[]}`))
+		f.on("POST", "/address/create/", ok(`[{"id":"`+idA+`","source":"tfacc-a@example.com","state":"PENDING_CREATE"}]`))
+
+		for name, req := range map[string]AddressCreate{
+			"a source without the prefix":  {Source: "info@example.com", Destinations: []string{idC}},
+			"a mailbox without the prefix": {Source: "tfacc-a@example.com", Destinations: []string{idB}},
+		} {
+			if _, err := c.Addresses().Create(context.Background(), req); !errors.Is(err, ErrSafetyPrefix) {
+				t.Errorf("%s: err = %v, want ErrSafetyPrefix", name, err)
+			}
+		}
+		if err := c.Addresses().Delete(context.Background(), idA); !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("delete of a real address: err = %v, want ErrSafetyPrefix", err)
+		}
+		if n := posts(f); n != 0 {
+			t.Errorf("%d POST requests were sent", n)
+		}
+		if _, err := c.Addresses().Create(context.Background(), AddressCreate{Source: "tfacc-a@example.com", Destinations: []string{idC}}); err != nil {
+			t.Errorf("a test address to a test mailbox: %v", err)
+		}
+	})
+
+	t.Run("a database is refused when one of its users lacks the prefix", func(t *testing.T) {
+		f, c := setup(t)
+		f.on("GET", "/psqluser/read/"+idB, ok(`{"id":"`+idB+`","name":"production"}`))
+		_, err := c.PsqlDBs().Create(context.Background(), DBCreate{Name: "tfacc-db", Server: idA, ReadOnlyUsers: []string{idB}})
+		if !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("err = %v, want ErrSafetyPrefix", err)
+		}
+		if n := posts(f); n != 0 {
+			t.Errorf("%d POST requests were sent", n)
+		}
+	})
+
 	t.Run("an app is refused under a shell user that is neither prefixed nor the sandbox user", func(t *testing.T) {
 		f, c := setup(t)
 		f.on("GET", "/osuser/read/"+idB, ok(`{"id":"`+idB+`","name":"production"}`))

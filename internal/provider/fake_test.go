@@ -42,12 +42,20 @@ var defaults = map[string]obj{
 	"app":       {"port": nil, "installer_url": nil},
 	"dnsrecord": {"priority": 10, "ttl": 3600},
 	"site":      {"ip4": nil, "ip6": nil, "cert": nil, "primary_domain": nil, "redirect": false, "generate_le": false, "disabled": false},
+	"cert":      {"intermediates": nil, "exp_date": "2030-01-01T00:00:00Z", "listed_domains": []any{}, "is_opalstack_letsencrypt": false},
+	"mariauser": {"external": false},
+	"psqluser":  {"external": false},
+	"mariadb":   {"charset": "utf8", "dbusers_readwrite": []any{}, "dbusers_readonly": []any{}},
+	"psqldb":    {"charset": "utf8", "dbusers_readwrite": []any{}, "dbusers_readonly": []any{}},
 	"domain":    {"delegated_dns_zone": false, "is_valid_hostname": true, "dkim_record": nil, "dkim_pubkey": nil, "dkim_privkey": "PRIVATE"},
 }
 
 // createOnly are the fields that only the answer to a create carries.
 var createOnly = map[string]obj{
-	"osuser": {"default_password": "fake-default-password"},
+	"osuser":    {"default_password": "fake-default-password"},
+	"mariauser": {"default_password": "fake-default-password"},
+	"psqluser":  {"default_password": "fake-default-password"},
+	"mailuser":  {"default_password": "fake-default-password"},
 }
 
 // seed adds an object as if it had always been there.
@@ -125,6 +133,9 @@ func (f *fakeAPI) fill(kind string, o obj, creating bool) {
 			}
 		}
 		return
+	}
+	if kind == "cert" {
+		o["sha256_fingerprint"] = fmt.Sprintf("fake:%d", len(fmt.Sprint(o["cert"])))
 	}
 	if kind != "app" {
 		return

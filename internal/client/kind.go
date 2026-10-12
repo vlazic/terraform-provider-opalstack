@@ -1,6 +1,7 @@
 package client
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,9 @@ type ReadKind[T any] struct {
 	// refs are the request fields that point at other objects. The safety
 	// prefix is checked on each object a write refers to.
 	refs []ref
+	// nameField is the field the safety prefix is checked on, when it is not
+	// "name": a mail address is identified by its source.
+	nameField string
 	// nameless marks a kind whose objects have no name of their own. Such an
 	// object is judged by the name of the object its first ref points at.
 	nameless bool
@@ -230,7 +234,7 @@ func (k Kind[T, C, U]) guard(ctx context.Context, verb string, req any) error {
 	if id == "" && verb != "create" {
 		return refuse("the request has no id")
 	}
-	name := field("name")
+	name := field(k.nameKey())
 	if name == "" && verb == "create" && !k.nameless {
 		// The API would choose a name, and it would not carry the prefix.
 		return refuse("the request gives the new %s no name", k.name)
@@ -291,12 +295,14 @@ func (k ReadKind[T]) nameOf(ctx context.Context, id string) (string, error) {
 		}
 		return k.other(parent.kind).nameOf(ctx, ids[0])
 	}
-	name, _ := (*obj)["name"].(string)
+	name, _ := (*obj)[k.nameKey()].(string)
 	if name == "" {
 		return "", fmt.Errorf("opalstack: %s %s has no name", k.name, id)
 	}
 	return name, nil
 }
+
+func (k ReadKind[T]) nameKey() string { return cmp.Or(k.nameField, "name") }
 
 func kind[T statused, C, U any](c *Client, name string) Kind[T, C, U] {
 	return Kind[T, C, U]{ReadKind[T]{c: c, name: name}}

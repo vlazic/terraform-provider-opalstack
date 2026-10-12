@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"os"
 	"regexp"
 	"strings"
@@ -33,7 +34,26 @@ func TestSweep(t *testing.T) {
 		t.Fatal("OPALSTACK_TEST_DOMAIN_BASE must be set to sweep")
 	}
 
+	// A kind the token cannot list is skipped: the token is widened one group
+	// of kinds at a time, and the others answer 403.
+	dbName := func(d client.DB) (string, string) { return d.Name, d.ID }
+	dbUserName := func(u client.DBUser) (string, string) { return u.Name, u.ID }
+	// An address before the mailbox and the domain it needs. Only addresses on
+	// a test domain under the base domain are swept.
+	sweep(ctx, t, "address", c.Addresses(), func(a client.Address) (string, string) {
+		local, domain, _ := strings.Cut(a.Source, "@")
+		if !sweepable.MatchString(domain) || !strings.HasSuffix(domain, base) {
+			return "", a.ID
+		}
+		return local, a.ID
+	})
+	sweep(ctx, t, "mailbox", c.MailUsers(), func(u client.MailUser) (string, string) { return u.Name, u.ID })
+	sweep(ctx, t, "MariaDB database", c.MariaDBs(), dbName)
+	sweep(ctx, t, "MariaDB user", c.MariaUsers(), dbUserName)
+	sweep(ctx, t, "PostgreSQL database", c.PsqlDBs(), dbName)
+	sweep(ctx, t, "PostgreSQL user", c.PsqlUsers(), dbUserName)
 	sweep(ctx, t, "site", c.Sites(), func(s client.Site) (string, string) { return s.Name, s.ID })
+	sweep(ctx, t, "certificate", c.Certs(), func(c client.Cert) (string, string) { return c.Name, c.ID })
 	sweep(ctx, t, "app", c.Apps(), func(a client.App) (string, string) { return a.Name, a.ID })
 	// Deleting a domain takes its DNS records with it.
 	sweep(ctx, t, "domain", c.Domains(), func(d client.Domain) (string, string) {
@@ -52,6 +72,10 @@ func sweep[T any, K interface {
 }](ctx context.Context, t *testing.T, what string, k K, nameAndID func(T) (string, string)) {
 	t.Helper()
 	all, err := k.List(ctx)
+	if errors.Is(err, client.ErrForbidden) {
+		t.Logf("FINDING sweep: the token cannot list the %ss, skipped", what)
+		return
+	}
 	if err != nil {
 		t.Errorf("cannot list the %ss: %v", what, err)
 		return

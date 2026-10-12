@@ -2,12 +2,20 @@ package provider
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	crand "crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"math/rand/v2"
 	"os"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
@@ -460,6 +468,266 @@ resource "opalstack_site" "s" {
 				),
 			},
 			{Config: config(full), ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionNoop)},
+		},
+	})
+}
+
+func TestAccMaria(t *testing.T) {
+	accDatabases(t, "maria", "utf8mb4", (*client.Client).MariaUsers, (*client.Client).MariaDBs)
+}
+
+func TestAccPsql(t *testing.T) {
+	accDatabases(t, "psql", "latin1", (*client.Client).PsqlUsers, (*client.Client).PsqlDBs)
+}
+
+// accDatabases runs one engine through users, a database and the access
+// between them. The databases go on the server the sandbox shell user lives on.
+func accDatabases(t *testing.T, engine, charset string, users func(*client.Client) client.DBUserKind, dbs func(*client.Client) client.DBKind) {
+	sandbox := accEnv(t, "OPALSTACK_TEST_OSUSER")
+	accEnv(t, tokenEnvVar)
+	userName, readerName, dbName, secondDB := accName(), accName(), accName(), accName()
+	user, db := "opalstack_"+engine+"user.u", "opalstack_"+engine+"db.d"
+	config := func(userExtra, db, dbExtra string) string {
+		return accProvider + fmt.Sprintf(`
+data "opalstack_osuser" "sandbox" { name = %[2]q }
+resource "opalstack_%[1]suser" "u" {
+  name      = %[3]q
+  server_id = data.opalstack_osuser.sandbox.server_id
+  %[4]s
+}
+resource "opalstack_%[1]suser" "reader" {
+  name      = %[5]q
+  server_id = data.opalstack_osuser.sandbox.server_id
+}
+resource "opalstack_%[1]sdb" "d" {
+  name      = %[6]q
+  server_id = data.opalstack_osuser.sandbox.server_id
+  %[7]s
+}
+`, engine, sandbox, userName, userExtra, readerName, db, dbExtra)
+	}
+	access := "user_ids = [opalstack_" + engine + "user.u.id]\n  readonly_user_ids = [opalstack_" + engine + "user.reader.id]"
+	password := `password = "` + accName() + `-Aa1"`
+	noPassword := []string{"default_password", "password"}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories,
+		CheckDestroy: resource.ComposeAggregateTestCheckFunc(
+			accNoneLeft(t, "database", func(c *client.Client) client.ReadKind[client.DB] { return dbs(c).ReadKind }, func(d client.DB) string { return d.Name }),
+			accNoneLeft(t, "database user", func(c *client.Client) client.ReadKind[client.DBUser] { return users(c).ReadKind }, func(u client.DBUser) string { return u.Name }),
+		),
+		Steps: []resource.TestStep{
+			{
+				Config: config("", dbName, ""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(user, "name", userName),
+					resource.TestCheckResourceAttr(user, "external", "false"),
+					resource.TestCheckResourceAttrSet(user, "default_password"),
+					resource.TestCheckResourceAttrSet(db, "charset"),
+					resource.TestCheckResourceAttr(db, "user_ids.#", "0"),
+				),
+			},
+			{Config: config("", dbName, ""), ConfigPlanChecks: accExpect(db, plancheck.ResourceActionNoop)},
+			{ResourceName: user, ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: noPassword},
+			{ResourceName: user, ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: noPassword, ImportStateId: userName},
+			{ResourceName: db, ImportState: true, ImportStateVerify: true},
+			{ResourceName: db, ImportState: true, ImportStateVerify: true, ImportStateId: dbName},
+			{
+				Config: config(password+"\n  external = true", dbName, access),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction(user, plancheck.ResourceActionUpdate),
+					plancheck.ExpectResourceAction(db, plancheck.ResourceActionUpdate),
+				}},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(user, "external", "true"),
+					resource.TestCheckResourceAttr(db, "user_ids.#", "1"),
+					resource.TestCheckResourceAttr(db, "readonly_user_ids.#", "1"),
+				),
+			},
+			{Config: config(password+"\n  external = true", dbName, access), ConfigPlanChecks: accExpect(db, plancheck.ResourceActionNoop)},
+			{
+				Config:           config(password+"\n  external = true", dbName, ""),
+				ConfigPlanChecks: accExpect(db, plancheck.ResourceActionUpdate),
+				Check:            resource.TestCheckResourceAttr(db, "user_ids.#", "0"),
+			},
+			{
+				Config:           config(password+"\n  external = true", secondDB, `charset = "`+charset+`"`),
+				ConfigPlanChecks: accExpect(db, plancheck.ResourceActionDestroyBeforeCreate),
+				Check:            resource.TestCheckResourceAttr(db, "charset", charset),
+			},
+		},
+	})
+}
+
+func TestAccMail(t *testing.T) {
+	if os.Getenv(resource.EnvTfAcc) == "" {
+		t.Skip("an acceptance test: set TF_ACC=1")
+	}
+	base := accEnv(t, "OPALSTACK_TEST_DOMAIN_BASE")
+	servers, err := accClient(t).ListServers(context.Background())
+	if err != nil || len(servers.IMAP) == 0 {
+		t.Fatalf("no IMAP server to put a test mailbox on: %v", err)
+	}
+	domain, boxName, local, other := accName()+"."+base, accName(), accName(), accName()
+	const box, address = "opalstack_mailuser.m", "opalstack_address.a"
+	config := func(boxExtra, local, addressExtra string) string {
+		return accProvider + fmt.Sprintf(`
+data "opalstack_server" "imap" { hostname = %[1]q }
+resource "opalstack_domain" "d" { name = %[2]q }
+resource "opalstack_mailuser" "m" {
+  name           = %[3]q
+  imap_server_id = data.opalstack_server.imap.id
+  %[4]s
+}
+resource "opalstack_address" "a" {
+  source = "%[5]s@${opalstack_domain.d.name}"
+  %[6]s
+}
+`, servers.IMAP[0].Hostname, domain, boxName, boxExtra, local, addressExtra)
+	}
+	delivered := "mailuser_ids = [opalstack_mailuser.m.id]"
+	password := `password = "` + accName() + `-Aa1"`
+	noPassword := []string{"default_password", "password"}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories,
+		CheckDestroy: resource.ComposeAggregateTestCheckFunc(
+			accNoneLeft(t, "address", func(c *client.Client) client.ReadKind[client.Address] { return c.Addresses().ReadKind }, func(a client.Address) string { return a.Source }),
+			accNoneLeft(t, "mailbox", func(c *client.Client) client.ReadKind[client.MailUser] { return c.MailUsers().ReadKind }, func(u client.MailUser) string { return u.Name }),
+			accNoDomainsLeft(t),
+		),
+		Steps: []resource.TestStep{
+			{
+				Config: config("", local, delivered),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(box, "name", boxName),
+					resource.TestCheckResourceAttrSet(box, "default_password"),
+					resource.TestCheckResourceAttr(address, "source", local+"@"+domain),
+					resource.TestCheckResourceAttr(address, "mailuser_ids.#", "1"),
+					resource.TestCheckResourceAttr(address, "forwards.#", "0"),
+				),
+			},
+			{Config: config("", local, delivered), ConfigPlanChecks: accExpect(address, plancheck.ResourceActionNoop)},
+			{ResourceName: box, ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: noPassword},
+			{ResourceName: box, ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: noPassword, ImportStateId: boxName},
+			{ResourceName: address, ImportState: true, ImportStateVerify: true},
+			{ResourceName: address, ImportState: true, ImportStateVerify: true, ImportStateId: local + "@" + domain},
+			{
+				Config: config(password, local, `forwards = ["tfacc-forward@example.com"]`),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction(box, plancheck.ResourceActionUpdate),
+					plancheck.ExpectResourceAction(address, plancheck.ResourceActionUpdate),
+				}},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(address, "mailuser_ids.#", "0"),
+					resource.TestCheckResourceAttr(address, "forwards.#", "1"),
+				),
+			},
+			{Config: config(password, local, `forwards = ["tfacc-forward@example.com"]`), ConfigPlanChecks: accExpect(address, plancheck.ResourceActionNoop)},
+			{
+				Config:           config(password, other, delivered),
+				ConfigPlanChecks: accExpect(address, plancheck.ResourceActionDestroyBeforeCreate),
+			},
+		},
+	})
+}
+
+// accSelfSigned makes a throwaway certificate for a host name and its key,
+// both PEM encoded. No test ever uses a real certificate.
+func accSelfSigned(t *testing.T, host string) (certPEM, keyPEM string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: host},
+		DNSNames:     []string{host},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(30 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(crand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
+		string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
+}
+
+func TestAccCert(t *testing.T) {
+	base := accEnv(t, "OPALSTACK_TEST_DOMAIN_BASE")
+	accEnv(t, tokenEnvVar)
+	provider, osuserID := accSandboxProvider(t)
+	domain, appName, siteName, first, second := accName()+"."+base, accName(), accName(), accName(), accName()
+	const addr = "opalstack_cert.c"
+	certOne, keyOne := accSelfSigned(t, domain)
+	certTwo, keyTwo := accSelfSigned(t, domain)
+	config := func(name, cert, key string) string {
+		return provider + fmt.Sprintf(`
+data "opalstack_osuser" "sandbox" { id = %[1]q }
+data "opalstack_ip" "v4" { server_id = data.opalstack_osuser.sandbox.server_id }
+resource "opalstack_domain" "d" { name = %[2]q }
+resource "opalstack_app" "a" {
+  name      = %[3]q
+  osuser_id = %[1]q
+  type      = "STA"
+}
+resource "opalstack_cert" "c" {
+  name = %[5]q
+  cert = %[6]q
+  key  = %[7]q
+}
+resource "opalstack_site" "s" {
+  name        = %[4]q
+  domain_ids  = [opalstack_domain.d.id]
+  routes      = [{ app_id = opalstack_app.a.id }]
+  ip4_id      = data.opalstack_ip.v4.id
+  cert_id     = opalstack_cert.c.id
+  generate_le = false
+}
+`, osuserID, domain, appName, siteName, name, cert, key)
+	}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories,
+		CheckDestroy: resource.ComposeAggregateTestCheckFunc(
+			accNoneLeft(t, "certificate", func(c *client.Client) client.ReadKind[client.Cert] { return c.Certs().ReadKind }, func(c client.Cert) string { return c.Name }),
+			accNoneLeft(t, "site", func(c *client.Client) client.ReadKind[client.Site] { return c.Sites().ReadKind }, func(s client.Site) string { return s.Name }),
+			accNoAppsLeft(t),
+			accNoDomainsLeft(t),
+		),
+		Steps: []resource.TestStep{
+			{
+				Config: config(first, certOne, keyOne),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "name", first),
+					resource.TestCheckResourceAttrSet(addr, "exp_date"),
+					resource.TestCheckResourceAttrSet(addr, "sha256_fingerprint"),
+					resource.TestCheckResourceAttrPair("opalstack_site.s", "cert_id", addr, "id"),
+				),
+			},
+			{Config: config(first, certOne, keyOne), ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionNoop)},
+			// The API returns the PEM text without the white space around it.
+			{ResourceName: addr, ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"key", "cert"}},
+			{ // renewed and renamed in place: the site keeps pointing at the same id
+				Config: config(second, certTwo, keyTwo),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction(addr, plancheck.ResourceActionUpdate),
+					plancheck.ExpectResourceAction("opalstack_site.s", plancheck.ResourceActionNoop),
+				}},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "name", second),
+					resource.TestCheckResourceAttrPair("opalstack_site.s", "cert_id", addr, "id"),
+				),
+			},
+			{Config: config(second, certTwo, keyTwo), ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionNoop)},
 		},
 	})
 }

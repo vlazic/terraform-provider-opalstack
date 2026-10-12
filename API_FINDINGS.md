@@ -220,6 +220,78 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
 - The spec lets `domain` and `type` change in place. Keep both RequiresReplace anyway: a record
   that changes type or zone is a different record, and this is the conservative reading.
 
+### mariauser, mariadb, psqluser, psqldb
+
+The two engines have the same shape under different paths (spec; `TestFindingMaria`,
+`TestFindingPsql`, `TestAccMaria`, `TestAccPsql`, 2026-10-12).
+
+| | Fields |
+|---|---|
+| User create | `server`* uuid, `name`* max 32 `^[a-z0-9_-]+$`, `password` max 64, `external` bool |
+| User update | `id`*, `password`, `external` |
+| User response | `id`, `state`, `ready`, `name`, `server`, `external`, `has_all_password_hashes` |
+| Database create | `name`* max 32, `server`* uuid, `charset` enum, `dbusers_readwrite`, `dbusers_readonly` (arrays of user ids) |
+| Database update | `id`*, `dbusers_readwrite`, `dbusers_readonly` |
+| Database response | `id`, `state`, `ready`, `name`, `server`, `charset`, both user arrays |
+
+- The answer to a user create carries `default_password`, whether or not a `password` was sent.
+  No later answer does, and no answer carries `password`.
+- A password change through update is accepted (`PENDING_UPDATE`, then ready).
+- A database created without `charset` gets `utf8` on both engines.
+- An update with an empty array removes every user from that list.
+- A second database of a name in use answers 400
+  `[{"non_field_errors":["Name already in use on this server."]}]`: names are unique per server.
+- Deleting a user that a database still names is accepted.
+- `charset` and `name` cannot be updated: RequiresReplace.
+
+### mailuser and address
+
+`TestFindingMail` and `TestAccMail`, 2026-10-12. The spec calls an address `VirtualAlias`.
+
+| | Fields |
+|---|---|
+| Mailbox create | `imap_server`* uuid, `name`* max 32 `^[a-z0-9_-]+$`, `password` max 64, `procmailrc`, `autoresponder_*` |
+| Mailbox update | `id`*, `password`, `procmailrc`, `autoresponder_*` |
+| Mailbox response | `id`, `state`, `ready`, `name`, `imap_server`, `procmailrc`, `autoresponder_enable` (a boolean, the spec says string), `autoresponder_subject`, `autoresponder_message`, `autoresponder_noreply` |
+| Address create | `source`* email, `forwards`* array of emails, `destinations` array of mailbox ids |
+| Address update | `id`*, `source`, `destinations`, `forwards` |
+| Address response | `id`, `state`, `ready`, `source`, `destinations`, `forwards` |
+
+- The account tested has four IMAP and four SMTP servers in `/server/list/`; a mailbox names one
+  IMAP server.
+- The answer to a mailbox create carries `default_password`; no later answer does.
+- An address has no name and no domain id. Its domain must be a domain of the account: otherwise
+  400 `[{"source":["Source address domain not found: <domain>."]}]`.
+- A second address with a source in use answers 400
+  `[{"source":["Address with this source already exists."]}]`.
+- An address may have neither a mailbox nor a forward: the update is accepted.
+- **Deleting a mailbox takes it out of every address that delivered to it**, silently: the address
+  goes to `PENDING_UPDATE` and has one destination fewer.
+- The provider does not manage `procmailrc` or the autoresponder.
+- For the safety prefix an address is judged by its `source`, and by the names of the mailboxes
+  it delivers to.
+
+### cert
+
+`TestFindingCert` and `TestAccCert`, 2026-10-12, with self-signed certificates.
+
+| | Fields |
+|---|---|
+| Create | `name` max 255 `^[-a-zA-Z0-9_]+$`, `cert`* PEM, `key`* PEM, `intermediates` nullable |
+| Update | `id`*, `name`, `cert`, `intermediates`, `key` |
+| Response | `id`, `name`, `cert`, `intermediates`, `key`, `exp_date`, `listed_domains`, `is_opalstack_letsencrypt`, `is_opalstack_shared_cert`, `sha1_fingerprint`, `sha256_fingerprint` |
+
+- **A certificate has no `state` and no `ready`**: create and update answer with the finished
+  object, and a delete is gone at once.
+- **Every read returns the private key.** The client's type has no field for it.
+- The `cert` text comes back without the white space around it.
+- A key that does not fit answers 400 `{"errors":["Certs or key invalid."]}`.
+- Names are not unique: a second certificate of the same name is accepted.
+- Certificate, key and name all update in place, and the id stays, so a site keeps its reference.
+- **Deleting a certificate that a site serves is accepted**, and the site's `cert` is null
+  afterwards.
+- `listed_domains` was empty for a self-signed certificate with one DNS name.
+
 ### server and ip (read only)
 
 - `GET /server/list/` returns an **object**, not an array: `{web_servers, imap_servers,
