@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"maps"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -27,9 +28,7 @@ func configure(t *testing.T, values map[string]tftypes.Value) *provider.Configur
 	for name := range objType.AttributeTypes {
 		full[name] = tftypes.NewValue(tftypes.String, nil)
 	}
-	for name, v := range values {
-		full[name] = v
-	}
+	maps.Copy(full, values)
 
 	var resp provider.ConfigureResponse
 	p.Configure(ctx, provider.ConfigureRequest{
@@ -61,10 +60,12 @@ func TestConfigure(t *testing.T) {
 		}
 	})
 
-	t.Run("missing token", func(t *testing.T) {
+	t.Run("missing or blank token", func(t *testing.T) {
 		t.Setenv(tokenEnvVar, "")
-		if resp := configure(t, nil); !resp.Diagnostics.HasError() {
-			t.Fatal("expected an error")
+		for _, values := range []map[string]tftypes.Value{nil, {"token": str("  ")}} {
+			if resp := configure(t, values); !resp.Diagnostics.HasError() {
+				t.Fatal("expected an error")
+			}
 		}
 	})
 

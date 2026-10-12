@@ -2,70 +2,43 @@ package client
 
 import (
 	"context"
-	"errors"
 	"fmt"
 )
 
-type readiness struct {
+// Status is the pair every managed object reports. The response types embed it.
+type Status struct {
 	State string `json:"state"`
 	Ready bool   `json:"ready"`
 }
 
-// waitReady polls GET /<kind>/read/<id> until ready is true. The caller bounds
-// the wait with the context deadline.
+func (s Status) status() Status { return s }
+
+type statused interface{ status() Status }
+
+// poll calls check until it reports done, sleeping first and backing off from
+// pollMin to pollMax. It sleeps first because it always follows a POST whose
+// answer already said the object was pending. The caller bounds the wait with
+// the context deadline.
 //
 // The API's state enum has no failure value, so a create that never completes
-// can only show up here as a timeout. The error therefore names the last state.
-func (c *Client) waitReady(ctx context.Context, kind, id string) error {
+// can only show up here as a timeout. The error therefore names the last state
+// that check reported.
+func (c *Client) poll(ctx context.Context, what string, check func() (done bool, state string, err error)) error {
 	last := "unknown"
-	return c.poll(ctx, func() (bool, error) {
-		obj, err := read[readiness](ctx, c, kind, id)
-		if err != nil {
-			return false, err
+	for delay := c.pollMin; ; delay = min(delay*2, c.pollMax) {
+		if err := sleep(ctx, delay); err != nil {
+			return fmt.Errorf("opalstack: gave up waiting for %s (last state %s): %w", what, last, err)
 		}
-		last = obj.State
-		return obj.Ready, nil
-	}, func() string {
-		return fmt.Sprintf("%s %s to become ready (last state %s)", kind, id, last)
-	})
-}
-
-// waitDeleted polls the same path until it answers 404, which is how the
-// official Python wrapper detects that a queued deletion has finished.
-func (c *Client) waitDeleted(ctx context.Context, kind, id string) error {
-	last := "unknown"
-	return c.poll(ctx, func() (bool, error) {
-		obj, err := read[readiness](ctx, c, kind, id)
-		if errors.Is(err, ErrNotFound) {
-			return true, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		last = obj.State
-		return false, nil
-	}, func() string {
-		return fmt.Sprintf("%s %s to be deleted (last state %s)", kind, id, last)
-	})
-}
-
-// poll calls check until it reports done, backing off from PollMin to PollMax.
-func (c *Client) poll(ctx context.Context, check func() (bool, error), what func() string) error {
-	delay := c.cfg.PollMin
-	for {
-		done, err := check()
-		if done {
-			return nil
-		}
-		if err == nil {
-			err = sleep(ctx, delay)
-		}
+		done, state, err := check()
 		if err != nil {
 			if ctx.Err() != nil {
-				return fmt.Errorf("opalstack: gave up waiting for %s: %w", what(), ctx.Err())
+				return fmt.Errorf("opalstack: gave up waiting for %s (last state %s): %w", what, last, ctx.Err())
 			}
 			return err
 		}
-		delay = min(delay*2, c.cfg.PollMax)
+		if done {
+			return nil
+		}
+		last = state
 	}
 }

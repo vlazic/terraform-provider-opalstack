@@ -20,11 +20,14 @@ Written to be read with no other context. Facts about the API are in
 - **Waiting cannot fail fast.** The API's state enum has no failure value, so `WaitReady` only ends
   on ready, on an error from the read, or on the caller's deadline. Its timeout error names the
   last state seen.
-- **Deletion is detected by 404 on `read`**, not by polling the list.
+- **Deletion is detected by 404 on `read`**, not by polling the list. `WaitReady` returns the object from the poll that reported ready.
 - **A POST is not retried on a gateway error or a transport error**, only on 429. A repeated
   create could make a second object. A GET is retried on 429, 502, 503 and 504.
 - **The safety prefix costs one extra GET per update and delete**, because those requests carry an
   id and the prefix is a property of the name. When the name cannot be read the write is refused.
+- **The safety prefix also checks the new name of a rename**, and refuses any write it cannot tie
+  to a name. It reads the request as it will be sent, so a new request type needs no code for it.
+- **A wait sleeps before its first poll**, because the POST it follows already said "pending".
 - **`dkim_privkey` is never decoded.** The client's domain type has no field for it.
 - **`domain` has an update** (`delegated_dns_zone`), which the first notes ruled out.
 - **`dnsrecord` update leaves out `domain` and `type`** although the API accepts them.

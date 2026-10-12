@@ -38,10 +38,6 @@ type IP struct {
 	Primary bool   `json:"primary"`
 }
 
-func (c *Client) ListIPs(ctx context.Context) ([]IP, error) {
-	return list[IP](ctx, c, "ip")
-}
-
-func (c *Client) ReadIP(ctx context.Context, id string) (*IP, error) {
-	return read[IP](ctx, c, "ip", id)
+func (c *Client) IPs() ReadKind[IP] {
+	return ReadKind[IP]{c: c, name: "ip"}
 }

@@ -46,12 +46,8 @@ func newFake(t *testing.T) (*fakeAPI, *Client, *[]string) {
 
 	var logs []string
 	c, err := New(Config{
-		Token:       testToken,
-		BaseURL:     srv.URL,
-		MinInterval: time.Nanosecond,
-		RetryBase:   time.Millisecond,
-		PollMin:     time.Millisecond,
-		PollMax:     2 * time.Millisecond,
+		Token:   testToken,
+		BaseURL: srv.URL,
 		Log: func(_ context.Context, msg string, fields map[string]any) {
 			raw, _ := json.Marshal(fields)
 			logs = append(logs, msg+" "+string(raw))
@@ -60,6 +56,7 @@ func newFake(t *testing.T) (*fakeAPI, *Client, *[]string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.minInterval, c.retryBase, c.pollMin, c.pollMax = 0, time.Millisecond, time.Millisecond, 2*time.Millisecond
 	return f, c, &logs
 }
 
@@ -91,12 +88,13 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, rep.body)
 }
 
+// count returns how many requests matched. An empty method or path matches any.
 func (f *fakeAPI) count(method, path string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	n := 0
 	for _, c := range f.calls {
-		if c.method == method && c.path == path {
+		if (method == "" || c.method == method) && (path == "" || c.path == path) {
 			n++
 		}
 	}
@@ -244,8 +242,8 @@ func TestReadRefusesMalformedID(t *testing.T) {
 			t.Errorf("id %q: err = %v, want a refusal that is not ErrNotFound", id, err)
 		}
 	}
-	if len(f.calls) != 0 {
-		t.Errorf("%d requests were sent for malformed ids", len(f.calls))
+	if n := f.count("", ""); n != 0 {
+		t.Errorf("%d requests were sent for malformed ids", n)
 	}
 }
 
@@ -282,14 +280,14 @@ func TestRetries(t *testing.T) {
 		}
 	})
 
-	t.Run("gives up after MaxAttempts", func(t *testing.T) {
+	t.Run("gives up after maxAttempts", func(t *testing.T) {
 		f, c, _ := newFake(t)
 		f.on("GET", "/app/read/"+idA, reply{status: 503})
 		if _, err := c.Apps().Read(context.Background(), idA); err == nil {
 			t.Fatal("expected an error")
 		}
-		if n := f.count("GET", "/app/read/"+idA); n != defaultMaxAttempts {
-			t.Errorf("%d requests, want %d", n, defaultMaxAttempts)
+		if n := f.count("GET", "/app/read/"+idA); n != maxAttempts {
+			t.Errorf("%d requests, want %d", n, maxAttempts)
 		}
 	})
 
@@ -318,6 +316,9 @@ func TestWaitReady(t *testing.T) {
 	}
 	if !got.Ready || got.Name != "tfacc-abc123" {
 		t.Errorf("unexpected object: %+v", got)
+	}
+	if n := f.count("GET", "/osuser/read/"+idA); n != 3 {
+		t.Errorf("%d reads, want 3: the object that reported ready is the one returned", n)
 	}
 }
 
@@ -368,15 +369,7 @@ func TestSafetyPrefix(t *testing.T) {
 		c.cfg.SafetyPrefix = "tfacc-"
 		return f, c
 	}
-	posts := func(f *fakeAPI) int {
-		n := 0
-		for _, call := range f.calls {
-			if call.method == "POST" {
-				n++
-			}
-		}
-		return n
-	}
+	posts := func(f *fakeAPI) int { return f.count("POST", "") }
 
 	t.Run("create with the prefix passes", func(t *testing.T) {
 		f, c := setup(t)
@@ -392,8 +385,20 @@ func TestSafetyPrefix(t *testing.T) {
 		if !errors.Is(err, ErrSafetyPrefix) {
 			t.Fatalf("err = %v, want ErrSafetyPrefix", err)
 		}
-		if len(f.calls) != 0 {
-			t.Errorf("%d requests were sent", len(f.calls))
+		if n := f.count("", ""); n != 0 {
+			t.Errorf("%d requests were sent", n)
+		}
+	})
+
+	t.Run("a rename out of the prefix is refused", func(t *testing.T) {
+		f, c := setup(t)
+		f.on("GET", "/site/read/"+idA, ok(`{"id":"`+idA+`","name":"tfacc-site"}`))
+		_, err := c.Sites().Update(context.Background(), SiteUpdate{ID: idA, Name: "production"})
+		if !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("err = %v, want ErrSafetyPrefix", err)
+		}
+		if n := posts(f); n != 0 {
+			t.Errorf("%d POST requests were sent", n)
 		}
 	})
 
@@ -475,12 +480,12 @@ func TestLogsAreRedacted(t *testing.T) {
 
 func TestThrottleSpacesRequests(t *testing.T) {
 	f, c, _ := newFake(t)
-	c.cfg.MinInterval = 20 * time.Millisecond
+	c.minInterval = 20 * time.Millisecond
 	f.on("GET", "/ip/list/", ok(`[]`))
 
 	start := time.Now()
 	for range 4 {
-		if _, err := c.ListIPs(context.Background()); err != nil {
+		if _, err := c.IPs().List(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 	}

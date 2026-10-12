@@ -5,6 +5,7 @@ package provider
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -65,7 +66,8 @@ func (p *opalstackProvider) Schema(_ context.Context, _ provider.SchemaRequest, 
 				Optional: true,
 			},
 			"request_timeout": schema.StringAttribute{
-				MarkdownDescription: "Limit for a single API request, as a duration such as `30s`. Defaults to `30s`. " +
+				MarkdownDescription: "Limit for a single API request, as a duration such as `45s`. Defaults to `" +
+					client.DefaultRequestTimeout.String() + "`. " +
 					"Waiting for an object to become ready is governed by each resource's `timeouts` instead.",
 				Optional: true,
 			},
@@ -90,9 +92,9 @@ func (p *opalstackProvider) Configure(ctx context.Context, req provider.Configur
 		}
 	}
 
-	token := cfg.Token.ValueString()
+	token := strings.TrimSpace(cfg.Token.ValueString())
 	if token == "" {
-		token = os.Getenv(tokenEnvVar)
+		token = strings.TrimSpace(os.Getenv(tokenEnvVar))
 	}
 	if token == "" && !resp.Diagnostics.HasError() {
 		resp.Diagnostics.AddAttributeError(path.Root("token"), "Missing Opalstack API token",

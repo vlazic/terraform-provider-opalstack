@@ -1,7 +1,5 @@
 package client
 
-const kindSite = "site"
-
 // Route sends requests for a URI prefix of a site to an app. ID is assigned by
 // the API and is never sent.
 type Route struct {
@@ -11,9 +9,8 @@ type Route struct {
 }
 
 type Site struct {
+	Status
 	ID            string   `json:"id"`
-	State         string   `json:"state"`
-	Ready         bool     `json:"ready"`
 	Name          string   `json:"name"`
 	Server        string   `json:"server"`
 	IP4           *string  `json:"ip4"`
@@ -40,8 +37,6 @@ type SiteCreate struct {
 	Disabled      *bool    `json:"disabled,omitempty"`
 }
 
-func (r SiteCreate) guardTarget() guardTarget { return guardTarget{name: r.Name} }
-
 // SiteUpdate sends only the fields that are set. Routes, when set, replace the
 // site's whole route list; a pointer to an empty slice clears it.
 type SiteUpdate struct {
@@ -58,8 +53,6 @@ type SiteUpdate struct {
 	Disabled      *bool     `json:"disabled,omitempty"`
 }
 
-func (r SiteUpdate) objectID() string { return r.ID }
-
 func (c *Client) Sites() Kind[Site, SiteCreate, SiteUpdate] {
-	return Kind[Site, SiteCreate, SiteUpdate]{c: c, name: kindSite}
+	return kind[Site, SiteCreate, SiteUpdate](c, "site")
 }

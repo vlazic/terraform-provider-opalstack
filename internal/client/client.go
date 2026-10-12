@@ -6,6 +6,7 @@ package client
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,14 +19,10 @@ import (
 )
 
 const (
-	DefaultBaseURL = "https://my.opalstack.com/api/v1"
+	DefaultBaseURL        = "https://my.opalstack.com/api/v1"
+	DefaultRequestTimeout = 30 * time.Second
 
-	defaultRequestTimeout = 30 * time.Second
-	defaultMinInterval    = 350 * time.Millisecond // just under 3 requests per second
-	defaultMaxAttempts    = 4
-	defaultRetryBase      = time.Second
-	defaultPollMin        = 2 * time.Second
-	defaultPollMax        = 15 * time.Second
+	maxAttempts = 4
 
 	maxResponseBytes = 16 << 20
 )
@@ -49,18 +46,17 @@ type Config struct {
 
 	HTTPClient *http.Client
 	Log        LogFunc
-
-	// The remaining fields exist so tests can run without real delays.
-	MinInterval time.Duration
-	MaxAttempts int
-	RetryBase   time.Duration
-	PollMin     time.Duration
-	PollMax     time.Duration
 }
 
 // Client talks to one Opalstack account.
 type Client struct {
 	cfg Config
+
+	// Delays. They are fields so the tests can shrink them.
+	minInterval time.Duration // spacing between requests
+	retryBase   time.Duration // first retry delay, doubled each attempt
+	pollMin     time.Duration // first delay between polls of a wait
+	pollMax     time.Duration // cap on the delay between polls
 
 	mu   sync.Mutex
 	next time.Time // earliest moment the next request may start
@@ -72,26 +68,19 @@ func New(cfg Config) (*Client, error) {
 	if cfg.Token == "" {
 		return nil, fmt.Errorf("opalstack: a token is required")
 	}
-	cfg.BaseURL = strings.TrimRight(orDefault(cfg.BaseURL, DefaultBaseURL), "/")
-	cfg.UserAgent = orDefault(cfg.UserAgent, "terraform-provider-opalstack")
-	cfg.RequestTimeout = orDefault(cfg.RequestTimeout, defaultRequestTimeout)
-	cfg.MinInterval = orDefault(cfg.MinInterval, defaultMinInterval)
-	cfg.MaxAttempts = orDefault(cfg.MaxAttempts, defaultMaxAttempts)
-	cfg.RetryBase = orDefault(cfg.RetryBase, defaultRetryBase)
-	cfg.PollMin = orDefault(cfg.PollMin, defaultPollMin)
-	cfg.PollMax = orDefault(cfg.PollMax, defaultPollMax)
+	cfg.BaseURL = strings.TrimRight(cmp.Or(cfg.BaseURL, DefaultBaseURL), "/")
+	cfg.UserAgent = cmp.Or(cfg.UserAgent, "terraform-provider-opalstack")
+	cfg.RequestTimeout = cmp.Or(cfg.RequestTimeout, DefaultRequestTimeout)
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{}
 	}
-	return &Client{cfg: cfg}, nil
-}
-
-func orDefault[T comparable](v, def T) T {
-	var zero T
-	if v == zero {
-		return def
-	}
-	return v
+	return &Client{
+		cfg:         cfg,
+		minInterval: 350 * time.Millisecond, // just under 3 requests per second
+		retryBase:   time.Second,
+		pollMin:     2 * time.Second,
+		pollMax:     15 * time.Second,
+	}, nil
 }
 
 // get performs a GET and decodes the response into out.
@@ -109,18 +98,9 @@ func (c *Client) post(ctx context.Context, path string, body, out any) error {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body []byte, out any) error {
-	var lastErr error
-	for attempt := 1; attempt <= c.cfg.MaxAttempts; attempt++ {
+	for attempt := 1; ; attempt++ {
 		status, respBody, retryAfter, err := c.roundTrip(ctx, method, path, body)
-		switch {
-		case err != nil:
-			lastErr = err
-			// A transport error on a POST is not retried: the server may have
-			// acted on it, and a second create would make a second object.
-			if method != http.MethodGet || ctx.Err() != nil {
-				return lastErr
-			}
-		case status >= 200 && status < 300:
+		if err == nil && status >= 200 && status < 300 {
 			if out == nil {
 				return nil
 			}
@@ -128,34 +108,29 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, out a
 				return fmt.Errorf("opalstack: decoding the response of %s %s: %w", method, path, err)
 			}
 			return nil
-		default:
-			lastErr = newAPIError(method, path, status, respBody)
-			if !retryable(method, status) {
-				return lastErr
-			}
 		}
-		if attempt == c.cfg.MaxAttempts {
-			break
+		if err == nil {
+			err = newAPIError(method, path, status, respBody)
 		}
-		delay := c.cfg.RetryBase << (attempt - 1)
-		if retryAfter > delay {
-			delay = retryAfter
+		if attempt == maxAttempts || !retryable(method, status) || ctx.Err() != nil {
+			return err
 		}
-		if err := sleep(ctx, delay); err != nil {
-			return lastErr
+		if sleep(ctx, max(c.retryBase<<(attempt-1), retryAfter)) != nil {
+			return err
 		}
 	}
-	return lastErr
 }
 
-// retryable reports whether a failed request may be sent again. 429 means the
-// request was not processed, so it is safe for any method. A gateway error says
-// nothing about whether a POST was applied, so only a GET is repeated.
+// retryable is the whole retry policy. status is 0 for a transport error.
+//
+// A GET may always be sent again. A POST may be repeated only on 429, which
+// means the request was not processed: after a gateway or transport error the
+// server may have acted on it, and a second create would make a second object.
 func retryable(method string, status int) bool {
 	switch status {
 	case http.StatusTooManyRequests:
 		return true
-	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+	case 0, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		return method == http.MethodGet
 	}
 	return false
@@ -209,7 +184,7 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, body []byte
 	return resp.StatusCode, respBody, retryAfter, nil
 }
 
-// throttle spaces requests at least MinInterval apart across all goroutines.
+// throttle spaces requests at least minInterval apart across all goroutines.
 func (c *Client) throttle(ctx context.Context) error {
 	c.mu.Lock()
 	now := time.Now()
@@ -217,7 +192,7 @@ func (c *Client) throttle(ctx context.Context) error {
 	if start.Before(now) {
 		start = now
 	}
-	c.next = start.Add(c.cfg.MinInterval)
+	c.next = start.Add(c.minInterval)
 	c.mu.Unlock()
 	return sleep(ctx, start.Sub(now))
 }

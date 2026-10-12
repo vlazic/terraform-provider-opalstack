@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -96,12 +97,7 @@ func collectMessages(field string, v any, out *[]string) {
 			collectMessages(field, item, out)
 		}
 	case map[string]any:
-		keys := make([]string, 0, len(t))
-		for k := range t {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
+		for _, k := range slices.Sorted(maps.Keys(t)) {
 			collectMessages(k, t[k], out)
 		}
 	}

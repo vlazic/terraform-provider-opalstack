@@ -1,11 +1,8 @@
 package client
 
-const kindApp = "app"
-
 type App struct {
+	Status
 	ID           string  `json:"id"`
-	State        string  `json:"state"`
-	Ready        bool    `json:"ready"`
 	Name         string  `json:"name"`
 	Server       string  `json:"server"`
 	OSUser       string  `json:"osuser"`
@@ -25,8 +22,6 @@ type AppCreate struct {
 	JSON         map[string]any `json:"json,omitempty"`
 }
 
-func (r AppCreate) guardTarget() guardTarget { return guardTarget{name: r.Name} }
-
 // AppUpdate can change the type and the settings. The name, the shell user and
 // the installer are fixed at creation.
 type AppUpdate struct {
@@ -35,8 +30,6 @@ type AppUpdate struct {
 	JSON map[string]any `json:"json,omitempty"`
 }
 
-func (r AppUpdate) objectID() string { return r.ID }
-
 func (c *Client) Apps() Kind[App, AppCreate, AppUpdate] {
-	return Kind[App, AppCreate, AppUpdate]{c: c, name: kindApp}
+	return kind[App, AppCreate, AppUpdate](c, "app")
 }
