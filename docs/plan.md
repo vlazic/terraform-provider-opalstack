@@ -41,22 +41,27 @@ Written to be read with no other context. Facts about the API are in
 Nothing below may start while the full-access token is the only token. Rule 2 of
 [`../CLAUDE.md`](../CLAUDE.md) is the gate.
 
-### The owner does first
+### Sandbox, done 2026-10-12
 
-1. Create a sandbox shell user for tests on the account's web server.
-2. Create a token for tests. Service ACL: only the endpoints of osuser, domain, app, site,
-   dnsrecord, server and ip. Object ACL: only the sandbox shell user. The `/tokenacl/` endpoints
-   in the spec describe what an ACL can express.
-3. Store it in `pass` under its own entry, separate from the full-access token.
-4. Say which base domain test domains may be created under.
+- A sandbox shell user and a base domain for tests exist on the account. Their names are not in
+  this repository; tests take them from `OPALSTACK_TEST_OSUSER` and `OPALSTACK_TEST_DOMAIN_BASE`.
+  The sandbox user's name deliberately does not start with `tfacc-`, so neither the safety prefix
+  nor a sweeper can ever match it.
+- A test token named `tfacc` exists. Service ACL: ip read only. Object ACL: the sandbox shell user
+  (read) and the base domain (read and write). It goes in `pass` at `Opalstack/tokens/tfacc`.
+- **This token probably cannot create anything yet**, and that is the first thing to find out. See
+  "Token ACLs" in the findings file.
 
 ### Then, in order
 
 1. Refetch the schema (`scripts/explore.sh` saves it as `explore-out/schema.oai-yaml`) and diff it
    against `spec/openapi.yaml`. The API changed inside v1 between May and October 2026.
-2. Answer item 3 and item 10 of the UNVERIFIED list in the findings file first: can a scoped token
-   create objects and then manage them, and does a hidden object answer 403 or 404? Both decide
-   whether the test design holds at all.
+2. Answer item 3 and item 10 of the UNVERIFIED list in the findings file first, with the test
+   token: what can it read and create as scoped, and does a hidden object answer 403 or 404? Start
+   with GETs (a list of each kind, a read of an object outside its ACL), then one create of a
+   `tfacc-` domain under the base domain. Widen the service ACL one switch at a time, only as far
+   as the tests need, and record each step: a service switch covers every object of its kind, so
+   each one is a deliberate trade against the code-level guard.
 3. Data sources: `opalstack_server`, `opalstack_ip`, `opalstack_osuser`, `opalstack_domain`,
    `opalstack_app`. These need no write.
 4. Resources, one at a time, each with acceptance tests before the next: `opalstack_osuser`,

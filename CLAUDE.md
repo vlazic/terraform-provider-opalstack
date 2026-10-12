@@ -17,15 +17,16 @@ the API does, each fact with its source. Keep it current, and mark anything not 
 The account this provider is developed against is a real production account.
 Nothing on it is a test object unless rule 2 says so.
 
-1. **The token.** It lives in `pass` at `Opalstack/tokens/full-access`. The agent does
+1. **The tokens.** The full-access one lives in `pass` at `Opalstack/tokens/full-access`,
+   the scoped test one at `Opalstack/tokens/tfacc`. The agent does
    not run `pass` and never holds the token: scripts that need it read it themselves, and the owner
    runs them. Never print, echo, log, commit or write the token anywhere. Do not run `env`,
    `printenv` or `set` unfiltered.
-2. **While the full-access token is the only one, the live API is GET only. No exceptions.** No
-   `POST` of any kind, to any path. This lifts only when the owner has created a sandbox shell user
-   and a token whose ACLs are scoped to it, and has said so. From then on, writes are allowed only
-   to objects whose name starts with `tfacc-` and, for apps and sites, that belong to the sandbox
-   user. The sandbox user itself is never modified or deleted.
+2. **With the full-access token the live API is GET only. No exceptions.** No `POST` of any kind,
+   to any path. Writes use the test token only, and only to objects whose name starts with `tfacc-`
+   and, for apps and sites, that belong to the sandbox shell user. The sandbox user and the base
+   domain for tests are never modified or deleted; their names come from `OPALSTACK_TEST_OSUSER`
+   and `OPALSTACK_TEST_DOMAIN_BASE` and are not written in this repository.
 3. Never call `/login/`, `/register/`, `/payment/*`, `/token/*` or `/tokenacl/*`. The provider never
    manages tokens.
 4. **Nothing from the real account goes into this repo**: no hostname, IP, domain, shell user name,

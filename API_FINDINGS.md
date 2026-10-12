@@ -64,8 +64,12 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
   (runbook, and Opalstack's own installers read `.[0].default_password`). The runbook records that
   a `password` sent on create is overridden by that server-chosen value, and that a specific
   password is then set through update.
-- **UNVERIFIED:** whether `default_password` is returned when `password` is omitted versus
-  supplied, and whether any later read returns it. The spec says no read does.
+- Observed on 2026-10-12, creating the sandbox shell user with a caller-chosen `password`: the
+  create response had a `default_password`, it was **not** the password sent, the response state
+  was `PENDING_CREATE`, and a `read` once the user was ready did not return `default_password`.
+  So the password sent on create is ignored, and the server's one is available exactly once.
+- **UNVERIFIED:** whether `default_password` is also returned when `password` is omitted, and
+  whether a password set through update takes effect.
 - The API has no way to manage SSH keys on a shell user (runbook).
 
 ### domain
@@ -221,6 +225,26 @@ than pick one.
 - App types in use: `APA`, `CUS`, `NPF`, `STA`. DNS record types in use: `A`, `AAAA`, `CNAME`, `TXT`.
 - IP: one address, type `"4"`, primary.
 
+## Token ACLs, as the dashboard presents them
+
+Read from the token form of the dashboard on 2026-10-12. This is the UI's model, not yet tested
+against the API.
+
+- A token has a **service ACL**: one read and one write switch per kind, for domain, ip,
+  dnsrecord, site, address, mailuser, quarantinedmail, app, osuser, osvar, mariadb, mariauser,
+  psqldb, psqluser, cert, notice and account. The dashboard describes a switch as "full access to a
+  given API endpoint", meaning every object of that kind. A new token has all of them on. There
+  is no switch for server, and the write switch for ip cannot be turned on.
+- A token also has **individual object ACLs**: a kind, one existing object of that kind, and a read
+  and a write box. The dashboard recommends these over service switches.
+- The two are alternatives for the same access, not a filter on each other: a service switch that
+  is on already covers every object. A token limited to test objects therefore has the service
+  switches **off** and object entries for the test objects only.
+- The ACL dialog shows the token's key in clear text. Do not read that dialog's text.
+
+The open question this leaves is item 3 below: an object entry names an existing object, so
+nothing in this model obviously lets a token create one.
+
 ## UNVERIFIED, needs a write test
 
 None of these can be answered with GET. Each is to be settled against `tfacc-` objects only, once a
@@ -230,7 +254,11 @@ sandbox shell user and a scoped token exist.
 2. Deleting a parent that still has children: a shell user with apps, an app still routed by a
    site, a domain attached to a site. Rejected, cascaded or orphaned?
 3. Whether a token restricted by object ACL can create objects, and then read and delete them.
-4. `default_password`: present with and without a caller-supplied `password`? Ever readable later?
+   The test token starts with no service switch but ip read, and object entries for the sandbox
+   shell user (read) and the test base domain (read and write). What it can create decides which
+   service switches it needs, and each one turned on widens it to every object of that kind.
+4. `default_password`: present when no `password` is sent? (With one sent: present, different
+   from it, and never readable later. See the osuser section.)
 5. Which `json` keys an app accepts per type, and whether the server adds defaults.
 6. Order preservation of `site.routes` and `site.domains`.
 7. Which DNS records a site creates on its own, and whether they appear in `/dnsrecord/list/`.
