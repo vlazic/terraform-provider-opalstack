@@ -141,6 +141,9 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
 | Response `DNSRecordResponse` | `id`, `state`, `ready`, `domain`, `type`, `content`, `priority` (default 10), `ttl` (default 3600) |
 | Delete | `[{"id"}]` |
 
+- Confirmed live by `TestAccDNSRecord`, 2026-10-12: a record created without `priority` and `ttl`
+  reads back 10 and 3600; `content` and `ttl` update in place; an `A` and a `TXT` record read back
+  the content they were given, the `TXT` one with spaces and without added quotes.
 - `DNSRecordTypeEnum`: `A` `AAAA` `CNAME` `MX` `TXT` `SRV` `CAA`.
 - The spec lets `domain` and `type` change in place. Keep both RequiresReplace anyway: a record
   that changes type or zone is a different record, and this is the conservative reading.

@@ -64,29 +64,37 @@ func accClient(t *testing.T) *client.Client {
 	return c
 }
 
+// accNoDomainsLeft fails when any domain with the test prefix still exists,
+// whichever test made it.
+func accNoDomainsLeft(t *testing.T) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		domains, err := accClient(t).Domains().List(context.Background())
+		if err != nil {
+			return err
+		}
+		for _, d := range domains {
+			if strings.HasPrefix(d.Name, accPrefix) {
+				return fmt.Errorf("a test domain was left behind (state %s)", d.State)
+			}
+		}
+		return nil
+	}
+}
+
+func accExpect(addr string, action plancheck.ResourceActionType) resource.ConfigPlanChecks {
+	return resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(addr, action)}}
+}
+
 func TestAccDomain(t *testing.T) {
 	base := accEnv(t, "OPALSTACK_TEST_DOMAIN_BASE")
 	accEnv(t, tokenEnvVar)
 	first, second := accName()+"."+base, accName()+"."+base
 	const addr = "opalstack_domain.d"
-	expect := func(action plancheck.ResourceActionType) resource.ConfigPlanChecks {
-		return resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(addr, action)}}
-	}
+	expect := func(action plancheck.ResourceActionType) resource.ConfigPlanChecks { return accExpect(addr, action) }
 
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: accFactories,
-		CheckDestroy: func(*terraform.State) error {
-			domains, err := accClient(t).Domains().List(context.Background())
-			if err != nil {
-				return err
-			}
-			for _, d := range domains {
-				if strings.HasPrefix(d.Name, accPrefix) {
-					return fmt.Errorf("a test domain was left behind (state %s)", d.State)
-				}
-			}
-			return nil
-		},
+		CheckDestroy:             accNoDomainsLeft(t),
 		Steps: []resource.TestStep{
 			{
 				Config: accProvider + `resource "opalstack_domain" "d" { name = "` + first + `" }`,
@@ -129,6 +137,52 @@ func TestAccDomain(t *testing.T) {
 				},
 				Config:           accProvider + `resource "opalstack_domain" "d" { name = "` + second + `" }`,
 				ConfigPlanChecks: expect(plancheck.ResourceActionCreate),
+			},
+		},
+	})
+}
+
+func TestAccDNSRecord(t *testing.T) {
+	base := accEnv(t, "OPALSTACK_TEST_DOMAIN_BASE")
+	accEnv(t, tokenEnvVar)
+	domain := accName() + "." + base
+	const addr = "opalstack_dnsrecord.r"
+	config := func(recordType, content, extra string) string {
+		return accProvider + fmt.Sprintf(`
+resource "opalstack_domain" "d" { name = %q }
+resource "opalstack_dnsrecord" "r" {
+  domain_id = opalstack_domain.d.id
+  type      = %q
+  content   = %q
+  %s
+}
+`, domain, recordType, content, extra)
+	}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories,
+		CheckDestroy:             accNoDomainsLeft(t),
+		Steps: []resource.TestStep{
+			{ // priority and ttl are left to the API
+				Config: config("A", "192.0.2.1", ""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "content", "192.0.2.1"),
+					resource.TestCheckResourceAttr(addr, "priority", "10"),
+					resource.TestCheckResourceAttr(addr, "ttl", "3600"),
+				),
+			},
+			{ResourceName: addr, ImportState: true, ImportStateVerify: true},
+			{
+				Config:           config("A", "192.0.2.2", "ttl = 300"),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionUpdate),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "content", "192.0.2.2"),
+					resource.TestCheckResourceAttr(addr, "ttl", "300"),
+				),
+			},
+			{
+				Config:           config("TXT", "tfacc test record", "ttl = 300"),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
 			},
 		},
 	})
