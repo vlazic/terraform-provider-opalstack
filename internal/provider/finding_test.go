@@ -669,3 +669,141 @@ func TestFindingCert(t *testing.T) {
 	p.must(err)
 	p.find("delete a certificate a site serves: accepted; certificate gone: %s; the site's cert afterwards set=%v", answer(waitErr), now.Cert != nil)
 }
+
+// What does a shell user's environment variable answer, and what may an update change?
+func TestFindingOSVar(t *testing.T) {
+	p := newProbe(t)
+	vars := p.c.OSVars()
+	describe := func(id string) string {
+		v, err := vars.Read(p.ctx, id)
+		if err != nil {
+			return answer(err)
+		}
+		return fmt.Sprintf("state=%s ready=%t content=%q osusers=%d global=%t", v.State, v.Ready, v.Content, len(v.OSUsers), v.Global)
+	}
+
+	name := accName()
+	v, err := vars.Create(p.ctx, client.OSVarCreate{Name: name, Content: "one", OSUsers: []string{p.osuser}})
+	p.find("variable created for one shell user: %s", p.took(err))
+	p.must(err)
+	later(p, vars, v.ID)
+	p.find("the variable right after the create: %s", describe(v.ID))
+	_, err = vars.WaitReady(p.ctx, v.ID)
+	p.find("waiting for the variable to be ready: %s; then %s", answer(err), describe(v.ID))
+	p.must(err)
+
+	content := "two words"
+	_, err = vars.Update(p.ctx, client.OSVarUpdate{ID: v.ID, Content: &content})
+	p.find("content changed, nothing else sent: %s", p.took(err))
+	if err == nil {
+		_, err = vars.WaitReady(p.ctx, v.ID)
+		p.must(err)
+		p.find("after the content change: %s", describe(v.ID))
+	}
+	none := []string{}
+	_, err = vars.Update(p.ctx, client.OSVarUpdate{ID: v.ID, OSUsers: &none})
+	p.find("shell users emptied: %s", p.took(err))
+	if err == nil {
+		_, err = vars.WaitReady(p.ctx, v.ID)
+		p.must(err)
+		p.find("after emptying the shell users: %s", describe(v.ID))
+	}
+	one := []string{p.osuser}
+	_, err = vars.Update(p.ctx, client.OSVarUpdate{ID: v.ID, OSUsers: &one})
+	p.find("shell user given back: %s", p.took(err))
+	if err == nil {
+		_, err = vars.WaitReady(p.ctx, v.ID)
+		p.must(err)
+	}
+
+	if dup, err := vars.Create(p.ctx, client.OSVarCreate{Name: name, Content: "again", OSUsers: []string{p.osuser}}); err == nil {
+		later(p, vars, dup.ID)
+		p.find("second variable with the same name for the same shell user: accepted")
+	} else {
+		p.find("second variable with the same name for the same shell user: %s", answer(err))
+	}
+	if bare, err := vars.Create(p.ctx, client.OSVarCreate{Name: accName()}); err == nil {
+		later(p, vars, bare.ID)
+		p.find("variable with no content and no shell user: %s", p.took(nil))
+	} else {
+		p.find("variable with no content and no shell user: %s", answer(err))
+	}
+	yes := true
+	_, err = vars.Create(p.ctx, client.OSVarCreate{Name: accName(), Content: "x", Global: &yes})
+	p.find("a global variable with the safety prefix set: %s", answer(err))
+
+	p.must(vars.Delete(p.ctx, v.ID))
+	p.find("variable deleted: %s", answer(vars.WaitDeleted(p.ctx, v.ID)))
+}
+
+// What does a mailbox answer for its filter rules and its autoresponder?
+func TestFindingMailFilter(t *testing.T) {
+	p := newProbe(t)
+	servers, err := p.c.ListServers(p.ctx)
+	p.must(err)
+	if len(servers.IMAP) == 0 {
+		t.Fatal("the account has no IMAP server")
+	}
+	boxes := p.c.MailUsers()
+	describe := func(id string) string {
+		b, err := boxes.Read(p.ctx, id)
+		if err != nil {
+			return answer(err)
+		}
+		return fmt.Sprintf("procmailrc=%q enable=%t subject=%q message=%q noreply=%q",
+			b.Procmailrc, b.AutoresponderEnable, b.AutoresponderSubject, b.AutoresponderMessage, b.AutoresponderNoreply)
+	}
+	settle := func(id string, err error) bool {
+		if err != nil {
+			return false
+		}
+		_, err = boxes.WaitReady(p.ctx, id)
+		p.must(err)
+		return true
+	}
+
+	plain, err := boxes.Create(p.ctx, client.MailUserCreate{IMAPServer: servers.IMAP[0].ID, Name: accName()})
+	p.must(err)
+	later(p, boxes, plain.ID)
+	settle(plain.ID, nil)
+	p.find("a mailbox created with none of the fields: %s", describe(plain.ID))
+
+	rules, subject, message, on := "# tfacc\n", "tfacc subject", "tfacc message", true
+	noreply := []string{"tfacc-noreply@example.com"}
+	full, err := boxes.Create(p.ctx, client.MailUserCreate{IMAPServer: servers.IMAP[0].ID, Name: accName(), MailFilterChange: client.MailFilterChange{
+		Procmailrc: &rules, AutoresponderEnable: &on, AutoresponderSubject: &subject, AutoresponderMessage: &message, AutoresponderNoreply: &noreply,
+	}})
+	p.find("a mailbox created with all of the fields: %s", p.took(err))
+	if err == nil {
+		later(p, boxes, full.ID)
+		settle(full.ID, nil)
+		p.find("that mailbox read back: %s", describe(full.ID))
+	}
+
+	_, err = boxes.Update(p.ctx, client.MailUserUpdate{ID: plain.ID, MailFilterChange: client.MailFilterChange{
+		Procmailrc: &rules, AutoresponderEnable: &on, AutoresponderSubject: &subject, AutoresponderMessage: &message, AutoresponderNoreply: &noreply,
+	}})
+	p.find("all of the fields set by an update: %s", p.took(err))
+	if settle(plain.ID, err) {
+		p.find("after that update: %s", describe(plain.ID))
+	}
+	off := false
+	_, err = boxes.Update(p.ctx, client.MailUserUpdate{ID: plain.ID, MailFilterChange: client.MailFilterChange{AutoresponderEnable: &off}})
+	p.find("autoresponder switched off, nothing else sent: %s", p.took(err))
+	if settle(plain.ID, err) {
+		p.find("after switching it off: %s", describe(plain.ID))
+	}
+	empty, nobody := "", []string{}
+	_, err = boxes.Update(p.ctx, client.MailUserUpdate{ID: plain.ID, MailFilterChange: client.MailFilterChange{
+		Procmailrc: &empty, AutoresponderSubject: &empty, AutoresponderMessage: &empty, AutoresponderNoreply: &nobody,
+	}})
+	p.find("every text field set to empty: %s", p.took(err))
+	if settle(plain.ID, err) {
+		p.find("after emptying them: %s", describe(plain.ID))
+	}
+	_, err = boxes.Update(p.ctx, client.MailUserUpdate{ID: plain.ID, Password: accPassword()})
+	p.find("a password change with no filter field: %s", answer(err))
+	if settle(plain.ID, err) {
+		p.find("after the password change: %s", describe(plain.ID))
+	}
+}

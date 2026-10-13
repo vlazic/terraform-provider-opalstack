@@ -278,6 +278,11 @@ func (k Kind[T, C, U]) guard(ctx context.Context, verb string, req any) error {
 			}
 		}
 	}
+	// A global object is given to every shell user of the account, and no name
+	// vouches for those.
+	if global, _ := fields["global"].(bool); global {
+		return refuse("a global %s reaches every shell user of the account", k.name)
+	}
 	if checked == 0 {
 		return refuse("the request names nothing the prefix %q could be checked against", prefix)
 	}

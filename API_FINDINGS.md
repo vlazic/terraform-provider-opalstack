@@ -268,9 +268,39 @@ The two engines have the same shape under different paths (spec; `TestFindingMar
 - An address may have neither a mailbox nor a forward: the update is accepted.
 - **Deleting a mailbox takes it out of every address that delivered to it**, silently: the address
   goes to `PENDING_UPDATE` and has one destination fewer.
-- The provider does not manage `procmailrc` or the autoresponder.
+- **Filter rules and autoresponder** (`TestFindingMailFilter`, 2026-10-13). A mailbox created
+  with none of the fields reads back `procmailrc` `""`, `autoresponder_enable` `false`,
+  `autoresponder_subject` and `autoresponder_message` `""`, `autoresponder_noreply` `[]`. All five
+  can be set on create and on update, and every read returns them. A field left out of an update
+  keeps its value: switching the autoresponder off keeps its subject, message and list, and a
+  password change touches none of them. An empty string or an empty list clears a field.
+- **`procmailrc` comes back without its trailing newline**: `"# tfacc\n"` is stored as `"# tfacc"`.
+- `/mailuser/update_public/` is the mailbox owner's own change, with the current password. The
+  provider does not call it.
 - For the safety prefix an address is judged by its `source`, and by the names of the mailboxes
   it delivers to.
+
+### osvar (environment variable of shell users)
+
+`TestFindingOSVar`, 2026-10-13.
+
+| | Fields |
+|---|---|
+| Create | `name`* max 128 `^[A-Za-z0-9_+-]*$`, `content` max 1024, `osusers` array of shell user ids, `global` |
+| Update | `id`*, `content`, `osusers`, `global`. No `name`: a renamed variable is another variable |
+| Response | `id`, `state`, `ready`, `name`, `content`, `osusers`, `global` |
+
+- A variable has a state like the other kinds: `PENDING_CREATE` and `PENDING_UPDATE`, then
+  `READY`. The provider waits.
+- A field left out of an update keeps its value.
+- `osusers` may be emptied, and a variable may be created with no shell user and no content: it
+  then belongs to nobody.
+- **A name is not unique**: a second variable with the same name for the same shell user is
+  accepted. Which of the two the shell user gets was not looked at.
+- The content is returned by every read, in the clear.
+- For the safety prefix a variable is judged by its own name and by the shell users it names. A
+  global one is refused while the prefix is set, and the tests never create one, so
+  **`global = true` is unverified against the live API**.
 
 ### cert
 

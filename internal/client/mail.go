@@ -11,17 +11,40 @@ type MailUser struct {
 	// DefaultPassword is set only on the value returned by Create, when no
 	// password was sent. No read returns it again.
 	DefaultPassword string `json:"default_password,omitempty"`
+	MailFilter
+}
+
+// MailFilter is what a mailbox does with mail by itself: its procmail rules
+// and its autoresponder.
+type MailFilter struct {
+	Procmailrc           string   `json:"procmailrc"`
+	AutoresponderEnable  bool     `json:"autoresponder_enable"`
+	AutoresponderSubject string   `json:"autoresponder_subject"`
+	AutoresponderMessage string   `json:"autoresponder_message"`
+	AutoresponderNoreply []string `json:"autoresponder_noreply"`
+}
+
+// MailFilterChange is the part of a create or an update that sets them. A
+// field left nil is not sent, and the API then keeps what it has.
+type MailFilterChange struct {
+	Procmailrc           *string   `json:"procmailrc,omitempty"`
+	AutoresponderEnable  *bool     `json:"autoresponder_enable,omitempty"`
+	AutoresponderSubject *string   `json:"autoresponder_subject,omitempty"`
+	AutoresponderMessage *string   `json:"autoresponder_message,omitempty"`
+	AutoresponderNoreply *[]string `json:"autoresponder_noreply,omitempty"`
 }
 
 type MailUserCreate struct {
 	IMAPServer string `json:"imap_server"`
 	Name       string `json:"name"`
 	Password   string `json:"password,omitempty"`
+	MailFilterChange
 }
 
 type MailUserUpdate struct {
 	ID       string `json:"id"`
 	Password string `json:"password,omitempty"`
+	MailFilterChange
 }
 
 func (c *Client) MailUsers() Kind[MailUser, MailUserCreate, MailUserUpdate] {
