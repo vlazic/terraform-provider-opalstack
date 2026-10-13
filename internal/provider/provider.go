@@ -195,5 +195,7 @@ func (p *opalstackProvider) Resources(context.Context) []func() resource.Resourc
 func (p *opalstackProvider) DataSources(context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		newServerDataSource, newIPDataSource, newOSUserDataSource, newDomainDataSource, newAppDataSource, newSiteDataSource,
+		newDNSRecordDataSource, newCertDataSource, newMariaUserDataSource, newMariaDBDataSource,
+		newPsqlUserDataSource, newPsqlDBDataSource, newMailUserDataSource, newAddressDataSource,
 	}
 }

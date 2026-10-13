@@ -46,6 +46,10 @@ func computedBool(description string) schema.BoolAttribute {
 	return schema.BoolAttribute{MarkdownDescription: description, Computed: true}
 }
 
+func computedStringSet(description string) schema.SetAttribute {
+	return schema.SetAttribute{MarkdownDescription: description, ElementType: types.StringType, Computed: true}
+}
+
 // idOr requires a lookup by id or by the other attribute, and not by both.
 func idOr(other string) []datasource.ConfigValidator {
 	return []datasource.ConfigValidator{
