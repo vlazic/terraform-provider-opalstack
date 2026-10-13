@@ -204,14 +204,7 @@ resource "opalstack_address" "a" { source = "info@example.com" }
 					resource.TestCheckResourceAttr(address, "forwards.#", "1"),
 				),
 			},
-			{Config: block + `
-removed {
-  from = opalstack_address.a
-  lifecycle {
-    destroy = false
-  }
-}
-`},
+			{Config: block + keepOnRemove(address)},
 		},
 	})
 	if n := f.wrote("address/update"); n != 0 {
@@ -235,6 +228,74 @@ func TestMailUserFilterOnCreate(t *testing.T) {
 				f.sent("mailuser/create", []string{`"procmailrc":":0\n`, `"autoresponder_enable":true`, `"autoresponder_noreply":["list@example.org"]`}, nil),
 			),
 		}},
+	})
+	if n := f.wrote("mailuser/update"); n != 0 {
+		t.Errorf("%d updates were sent", n)
+	}
+}
+
+// The answer to a create need not carry the texts yet, and the API may store
+// each of them without the white space around it. Neither is verified for the
+// subject and the message. All three must end as the configuration has them.
+func TestMailUserFilterOnCreateWithALateAnswer(t *testing.T) {
+	f, factories, block := fakeProvider(t)
+	f.stored = trimmed("mailuser", "procmailrc", "autoresponder_subject", "autoresponder_message")
+	f.answered = func(kind string, answer obj) {
+		if kind == "mailuser" {
+			answer["procmailrc"], answer["autoresponder_subject"], answer["autoresponder_message"] = "", "", ""
+		}
+	}
+	const box = "opalstack_mailuser.m"
+	config := block + boxConfig(`
+  procmailrc = <<-EOT
+    :0
+    * ^Subject: tfacc
+    tfacc/
+  EOT
+  autoresponder_subject = "Away "
+  autoresponder_message = <<-EOT
+    Back on Monday.
+  EOT
+`)
+	asWritten := resource.ComposeAggregateTestCheckFunc(
+		resource.TestCheckResourceAttr(box, "procmailrc", filterRules+"\n"),
+		resource.TestCheckResourceAttr(box, "autoresponder_subject", "Away "),
+		resource.TestCheckResourceAttr(box, "autoresponder_message", "Back on Monday.\n"),
+	)
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check: resource.ComposeAggregateTestCheckFunc(asWritten, func(*terraform.State) error {
+					if got := f.get(f.ids("mailuser")[0]); got["procmailrc"] != filterRules || got["autoresponder_subject"] != "Away" {
+						return fmt.Errorf("the fake stores the texts as %q and %q", got["procmailrc"], got["autoresponder_subject"])
+					}
+					return nil
+				}),
+			},
+			{Config: config, ConfigPlanChecks: expectEmptyPlan(), Check: asWritten},
+		},
+	})
+
+	// Adopted, the state holds what the API has, and the configuration still
+	// changes nothing.
+	f.seed("mailuser", obj{"id": boxID, "name": "tfacc-box", "imap_server": serverID, "procmailrc": filterRules,
+		"autoresponder_subject": "Away", "autoresponder_message": "Back on Monday."})
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: config + `
+import {
+  to = opalstack_mailuser.m
+  id = "tfacc-box"
+}
+`,
+				Check: resource.TestCheckResourceAttr(box, "autoresponder_subject", "Away"),
+			},
+			{Config: block + keepOnRemove(box)},
+		},
 	})
 	if n := f.wrote("mailuser/update"); n != 0 {
 		t.Errorf("%d updates were sent", n)
@@ -301,14 +362,7 @@ import {
 				ConfigPlanChecks: expectEmptyPlan(),
 				Check:            checkFilterRead(box),
 			},
-			{Config: block + `
-removed {
-  from = opalstack_mailuser.m
-  lifecycle {
-    destroy = false
-  }
-}
-`},
+			{Config: block + keepOnRemove(box)},
 		},
 	})
 	if n := f.wrote("mailuser/update"); n != 0 {

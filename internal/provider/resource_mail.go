@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -52,32 +51,6 @@ type mailFilterModel struct {
 // or upgrading from a version without these fields, changes nothing.
 const unmanaged = " Left out, it is not managed: a new mailbox gets the API's default and an existing one " +
 	"keeps what the API has."
-
-// sameText is for a text the API may store without the white space around it:
-// `procmailrc` loses its trailing newline, which a heredoc always has. When the
-// configuration differs from the state only in that, the state is planned, so
-// nothing shows as a change.
-type sameText struct{}
-
-func (sameText) Description(context.Context) string {
-	return "White space around the text is not a change."
-}
-
-func (m sameText) MarkdownDescription(ctx context.Context) string { return m.Description(ctx) }
-
-func (sameText) PlanModifyString(_ context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
-	resp.PlanValue = keptText(req.StateValue, req.PlanValue)
-}
-
-// keptText returns held when got differs from it only in the white space
-// around it, and got otherwise.
-func keptText(held, got types.String) types.String {
-	if held.IsNull() || held.IsUnknown() || got.IsNull() || got.IsUnknown() ||
-		strings.TrimSpace(held.ValueString()) != strings.TrimSpace(got.ValueString()) {
-		return got
-	}
-	return held
-}
 
 func newMailUserResource() resource.Resource { return &mailUserResource{} }
 
@@ -135,10 +108,11 @@ func (r *mailUserResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				PlanModifiers: []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()},
 			},
 			"autoresponder_subject": schema.StringAttribute{
-				MarkdownDescription: "Subject of the automatic answer. Set it to `\"\"` to clear it." + unmanaged,
-				Optional:            true,
-				Computed:            true,
-				PlanModifiers:       keep,
+				MarkdownDescription: "Subject of the automatic answer. White space around it is not shown as a " +
+					"change. Set it to `\"\"` to clear it." + unmanaged,
+				Optional:      true,
+				Computed:      true,
+				PlanModifiers: keepText,
 			},
 			"autoresponder_message": schema.StringAttribute{
 				MarkdownDescription: "Text of the automatic answer. White space around it is not shown as a " +
@@ -161,14 +135,14 @@ func (m *mailUserModel) set(ctx context.Context, u *client.MailUser) diag.Diagno
 	return m.mailFilterModel.set(ctx, u.MailFilter)
 }
 
-// set copies what a read returns. The two long texts are kept as written when
-// they differ from the API's only in the white space around them, which would
+// set copies what a read returns. The texts are kept as written when they
+// differ from the API's only in the white space around them, which would
 // otherwise show as a change, or as a result that contradicts the plan.
 func (m *mailFilterModel) set(ctx context.Context, f client.MailFilter) diag.Diagnostics {
 	var diags diag.Diagnostics
 	m.Procmailrc = keptText(m.Procmailrc, types.StringValue(f.Procmailrc))
 	m.AutoresponderEnable = types.BoolValue(f.AutoresponderEnable)
-	m.AutoresponderSubject = types.StringValue(f.AutoresponderSubject)
+	m.AutoresponderSubject = keptText(m.AutoresponderSubject, types.StringValue(f.AutoresponderSubject))
 	m.AutoresponderMessage = keptText(m.AutoresponderMessage, types.StringValue(f.AutoresponderMessage))
 	m.AutoresponderNoreply = stringSet(ctx, f.AutoresponderNoreply, &diags)
 	return diags
@@ -240,6 +214,7 @@ func (r *mailUserResource) Create(ctx context.Context, req resource.CreateReques
 	}
 	// In state before the wait, so a wait that fails does not leave an orphan,
 	// and with the password, which no later read can supply.
+	planned := m.mailFilterModel
 	resp.Diagnostics.Append(m.set(ctx, created)...)
 	m.DefaultPassword = stringOrNull(created.DefaultPassword)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
@@ -261,6 +236,9 @@ func (r *mailUserResource) Create(ctx context.Context, req resource.CreateReques
 			return
 		}
 	}
+	// Against the plan once more, not against the answer to the create: a text
+	// that answer did not carry yet would otherwise be taken as the API has it.
+	m.mailFilterModel = planned
 	resp.Diagnostics.Append(m.set(ctx, ready)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }

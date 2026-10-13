@@ -35,10 +35,13 @@ func (r OSVarCreate) MarshalJSON() ([]byte, error) {
 }
 
 // A variable is judged by its own name for the safety prefix, and by the shell
-// users it is given to. A global one is refused outright while the prefix is
-// set (guard): it reaches shell users no name can vouch for.
+// users it is given to: those a request names and, for an update or a delete,
+// those it has now. A global one is refused outright while the prefix is set
+// (guard), whether the request would make it global or it is global already:
+// it reaches shell users no name can vouch for.
 func (c *Client) OSVars() Kind[OSVar, OSVarCreate, OSVarUpdate] {
 	k := kind[OSVar, OSVarCreate, OSVarUpdate](c, "osvar")
 	k.refs = []ref{{path: "osusers", kind: "osuser", exempt: c.cfg.SafetyOSUserID}}
+	k.heldToo = true
 	return k
 }

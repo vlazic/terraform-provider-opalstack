@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -161,6 +162,32 @@ func stringOrNull(s string) types.String {
 		return types.StringNull()
 	}
 	return types.StringValue(s)
+}
+
+// sameText is for a text the API may store without the white space around it:
+// `procmailrc` loses its trailing newline, which a heredoc always has. When the
+// configuration differs from the state only in that, the state is planned, so
+// nothing shows as a change.
+type sameText struct{}
+
+func (sameText) Description(context.Context) string {
+	return "White space around the text is not a change."
+}
+
+func (m sameText) MarkdownDescription(ctx context.Context) string { return m.Description(ctx) }
+
+func (sameText) PlanModifyString(_ context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	resp.PlanValue = keptText(req.StateValue, req.PlanValue)
+}
+
+// keptText returns held when got differs from it only in the white space
+// around it, and got otherwise.
+func keptText(held, got types.String) types.String {
+	if held.IsNull() || held.IsUnknown() || got.IsNull() || got.IsUnknown() ||
+		strings.TrimSpace(held.ValueString()) != strings.TrimSpace(got.ValueString()) {
+		return got
+	}
+	return held
 }
 
 // idSetAttribute is a set of ids or addresses the configuration may leave out:

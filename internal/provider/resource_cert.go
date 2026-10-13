@@ -85,14 +85,11 @@ func (r *certResource) Schema(ctx context.Context, _ resource.SchemaRequest, res
 func (m *certModel) set(c *client.Cert) {
 	m.ID = types.StringValue(c.ID)
 	m.Name = types.StringValue(c.Name)
-	if strings.TrimSpace(m.Cert.ValueString()) != strings.TrimSpace(c.Cert) {
-		m.Cert = types.StringValue(c.Cert)
-	}
-	switch got := strings.TrimSpace(types.StringPointerValue(c.Intermediates).ValueString()); {
-	case got == "":
+	m.Cert = keptText(m.Cert, types.StringValue(c.Cert))
+	if got := types.StringPointerValue(c.Intermediates); strings.TrimSpace(got.ValueString()) == "" {
 		m.Intermediates = types.StringNull()
-	case strings.TrimSpace(m.Intermediates.ValueString()) != got:
-		m.Intermediates = types.StringValue(*c.Intermediates)
+	} else {
+		m.Intermediates = keptText(m.Intermediates, got)
 	}
 	m.ExpDate = types.StringValue(c.ExpDate)
 	m.SHA256 = types.StringValue(c.SHA256)

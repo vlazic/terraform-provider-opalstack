@@ -128,14 +128,7 @@ resource "opalstack_domain" "d" { name = "example.com" }
 				ExpectError: regexp.MustCompile(`the client is\s+read-only`),
 			},
 			{ // forgotten, not destroyed: the test's own destroy could not delete it either
-				Config: block + `
-removed {
-  from = opalstack_domain.d
-  lifecycle {
-    destroy = false
-  }
-}
-`,
+				Config: block + keepOnRemove("opalstack_domain.d"),
 			},
 		},
 	})

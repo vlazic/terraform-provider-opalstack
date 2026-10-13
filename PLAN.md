@@ -52,9 +52,9 @@ Written to be read with no other context. Facts about the API are in
   `procmailrc` is absorbed in two places: the model keeps the text as written when the API's
   differs only in the white space around it, and a plan modifier plans the state when the
   configuration differs from it only in that.
-- **All of this is tested offline only.** `TestAccOSVar` and the filter steps of `TestAccMail` are
-  written and have not run against the real account yet. `TestAccOSVar` needs the write switch
-  of osvar; the sweeper covers the kind.
+- `TestAccOSVar`, `TestAccMail` with its filter steps and `TestAccOSUser` passed against the real
+  account on 2026-10-13. The eight data sources are tested offline only. `TestAccOSVar` needs the
+  write switch of osvar; the sweeper covers the kind.
 
 ## Decisions that differ from the first design notes
 
@@ -106,7 +106,7 @@ Written to be read with no other context. Facts about the API are in
   turns on the service write switch of each kind it tests, and **while those are on the token can
   change every object of those kinds on the account, and the safety prefix is the only thing
   between a test and a real object**. Every acceptance test configures the provider with
-  `safety_prefix`, and the app and site tests with `safety_osuser_id` as well.
+  `safety_prefix`, and the app, site and osvar tests with `safety_osuser_id` as well.
 - The procedure, start and end of a testing session. The owner keeps a script outside this
   repository that flips the switches in the dashboard (it reads checkbox states only, never the
   dialog's text, which shows the key):
@@ -120,5 +120,5 @@ Written to be read with no other context. Facts about the API are in
 ## Next
 
 1. The open items at the end of `API_FINDINGS.md`.
-2. Run `TestAccOSVar` and `TestAccMail` against the real account, then release 0.2.0.
+2. Release 0.2.0.
 3. Not planned: quarantined mail, notices.

@@ -38,14 +38,10 @@ func (d *siteDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Looks up a site by `id` or by `name`.",
 		Attributes: map[string]schema.Attribute{
-			"id":        lookupAttribute("UUID of the site."),
-			"name":      lookupAttribute("Name of the site."),
-			"server_id": computedString("UUID of the server the site is served from."),
-			"domain_ids": schema.SetAttribute{
-				MarkdownDescription: "UUIDs of the domains the site answers for.",
-				ElementType:         types.StringType,
-				Computed:            true,
-			},
+			"id":         lookupAttribute("UUID of the site."),
+			"name":       lookupAttribute("Name of the site."),
+			"server_id":  computedString("UUID of the server the site is served from."),
+			"domain_ids": computedStringSet("UUIDs of the domains the site answers for."),
 			"routes": schema.SetNestedAttribute{
 				MarkdownDescription: "Which app answers which path.",
 				Computed:            true,

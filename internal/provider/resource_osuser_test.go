@@ -80,6 +80,21 @@ func TestOSUserResource(t *testing.T) {
 				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
 				Check:            resource.TestCheckResourceAttr(addr, "default_password", "fake-default-password"),
 			},
+			{ // created with a password: the create carries it, and the state holds the API's own as well
+				Config:           block + osuserWithPassword("tfacc-three", serverID, "tfacc-password-two"),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "password", "tfacc-password-two"),
+					resource.TestCheckResourceAttr(addr, "default_password", "fake-default-password"),
+					f.sent("osuser/create", []string{`"name":"tfacc-three"`, `"password":"tfacc-password-two"`}, nil),
+					func(*terraform.State) error {
+						if n := f.wrote("osuser/update"); n != 1 {
+							return fmt.Errorf("%d updates were sent, want none for a password given on create", n)
+						}
+						return nil
+					},
+				),
+			},
 		},
 	})
 }

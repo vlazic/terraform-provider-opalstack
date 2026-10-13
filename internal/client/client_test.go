@@ -192,13 +192,20 @@ func TestUpdateWaitsForAnObjectThatIsNotReady(t *testing.T) {
 	if n := f.count("POST", "/mailuser/update/"); n != 4 {
 		t.Errorf("%d updates sent in all, want 4", n)
 	}
-	// Any other 400 is not waited on.
-	f.on("POST", "/mailuser/update/", reply{status: 400, body: `[{"password":["Too short."]}]`})
-	if _, err := c.MailUsers().Update(context.Background(), MailUserUpdate{ID: idA, Password: "x"}); err == nil {
-		t.Error("a validation error was swallowed")
+	// Any other 400 is not waited on, whatever its words: only a message on
+	// the id is the refusal.
+	reads := f.count("GET", "")
+	for i, body := range []string{`[{"password":["Too short."]}]`, `[{"procmailrc":["Not ready."]}]`} {
+		f.on("POST", "/mailuser/update/", reply{status: 400, body: body})
+		if _, err := c.MailUsers().Update(context.Background(), MailUserUpdate{ID: idA, Password: "x"}); err == nil {
+			t.Errorf("%s: a validation error was swallowed", body)
+		}
+		if n := f.count("POST", "/mailuser/update/"); n != 5+i {
+			t.Errorf("%s: %d updates sent in all, want %d", body, n, 5+i)
+		}
 	}
-	if n := f.count("POST", "/mailuser/update/"); n != 5 {
-		t.Errorf("%d updates sent in all, want 5", n)
+	if n := f.count("GET", "") - reads; n != 0 {
+		t.Errorf("%d reads followed a validation error: it was waited on", n)
 	}
 }
 
@@ -724,6 +731,73 @@ func TestSafetyPrefix(t *testing.T) {
 		}
 	})
 
+	t.Run("a variable is judged by what it is now, too", func(t *testing.T) {
+		f, c := setup(t)
+		c.cfg.SafetyOSUserID = idB
+		ctx := context.Background()
+		content, no := "x", false
+		f.on("GET", "/osuser/read/"+idC, ok(`{"id":"`+idC+`","name":"production"}`))
+
+		// Global already: nothing in the request has to say so.
+		f.on("GET", "/osvar/read/"+idA, ok(`{"id":"`+idA+`","name":"tfacc-VAR","osusers":[],"global":true}`))
+		for name, req := range map[string]OSVarUpdate{
+			"a content-only update":       {ID: idA, Content: &content},
+			"an update that ends global":  {ID: idA, Global: &no},
+			"an update of its shell user": {ID: idA, OSUsers: &[]string{idB}},
+		} {
+			if _, err := c.OSVars().Update(ctx, req); !errors.Is(err, ErrSafetyPrefix) {
+				t.Errorf("%s of a global variable: err = %v, want ErrSafetyPrefix", name, err)
+			}
+		}
+		if err := c.OSVars().Delete(ctx, idA); !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("delete of a global variable: err = %v, want ErrSafetyPrefix", err)
+		}
+
+		// Given to a shell user that is neither prefixed nor the sandbox user.
+		f.on("GET", "/osvar/read/"+idA, ok(`{"id":"`+idA+`","name":"tfacc-VAR","osusers":["`+idB+`","`+idC+`"],"global":false}`))
+		if _, err := c.OSVars().Update(ctx, OSVarUpdate{ID: idA, Content: &content}); !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("update of a variable a real shell user has: err = %v, want ErrSafetyPrefix", err)
+		}
+		if _, err := c.OSVars().Update(ctx, OSVarUpdate{ID: idA, OSUsers: &[]string{idB}}); !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("taking a variable from a real shell user: err = %v, want ErrSafetyPrefix", err)
+		}
+		if err := c.OSVars().Delete(ctx, idA); !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("delete of a variable a real shell user has: err = %v, want ErrSafetyPrefix", err)
+		}
+		if n := posts(f); n != 0 {
+			t.Errorf("%d POST requests were sent", n)
+		}
+
+		// The sandbox user and a prefixed one: the variable is read once, and
+		// the sandbox user is not read at all.
+		f.on("GET", "/osuser/read/"+idC, ok(`{"id":"`+idC+`","name":"tfacc-user"}`))
+		f.on("POST", "/osvar/update/", ok(`[{"id":"`+idA+`","name":"tfacc-VAR"}]`))
+		f.on("POST", "/osvar/delete/", ok(`{"ok":"Queued for deletion."}`))
+		reads := f.count("GET", "/osvar/read/"+idA)
+		if _, err := c.OSVars().Update(ctx, OSVarUpdate{ID: idA, Content: &content}); err != nil {
+			t.Errorf("update of a test variable: %v", err)
+		}
+		if n := f.count("GET", "/osvar/read/"+idA) - reads; n != 1 {
+			t.Errorf("the variable was read %d times, want 1", n)
+		}
+		if err := c.OSVars().Delete(ctx, idA); err != nil {
+			t.Errorf("delete of a test variable: %v", err)
+		}
+		if n := f.count("GET", "/osuser/read/"+idB); n != 0 {
+			t.Errorf("the sandbox user was read %d times", n)
+		}
+
+		// No other kind is judged that way: a database keeps its users.
+		f.on("GET", "/psqldb/read/"+idA, ok(`{"id":"`+idA+`","name":"tfacc-db","dbusers_readwrite":["`+idB+`"]}`))
+		f.on("POST", "/psqldb/delete/", ok(`{"ok":"Queued for deletion."}`))
+		if err := c.PsqlDBs().Delete(ctx, idA); err != nil {
+			t.Errorf("delete of a test database: %v", err)
+		}
+		if n := f.count("GET", "/psqluser/read/"+idB); n != 0 {
+			t.Errorf("the database's user was read %d times", n)
+		}
+	})
+
 	t.Run("a site is refused when a domain or a routed app lacks the prefix", func(t *testing.T) {
 		f, c := setup(t)
 		f.on("GET", "/site/read/"+idA, ok(`{"id":"`+idA+`","name":"tfacc-site"}`))
@@ -803,6 +877,60 @@ func TestLogsAreRedacted(t *testing.T) {
 	}
 }
 
+// The content of an environment variable is as likely a secret as not, and no
+// key name says so. The same key on a DNS record is its value, and stays.
+func TestLogsRedactTheContentOfAVariable(t *testing.T) {
+	f, c, logs := newFake(t)
+	f.on("POST", "/osvar/create/", ok(`[{"id":"`+idA+`","name":"tfacc-VAR","content":"SECRET-ONE"}]`))
+	f.on("GET", "/osvar/read/"+idA, ok(`{"id":"`+idA+`","name":"tfacc-VAR","content":"SECRET-TWO"}`))
+	f.on("GET", "/osvar/list/", ok(`[{"id":"`+idA+`","name":"tfacc-VAR","content":"SECRET-THREE"}]`))
+	f.on("POST", "/osvar/update/",
+		reply{status: 400, body: `[{"content":"SECRET-FOUR"}]`},
+		reply{status: 400, body: `[{"content":["Ensure this field has no more than 1024 characters."]}]`},
+		reply{status: 400, body: `[{"name":["Refused: SECRET-FIVE"]}]`})
+	f.on("POST", "/dnsrecord/create/", ok(`[{"id":"`+idB+`","domain":"`+idC+`","type":"TXT","content":"tfacc-shown"}]`))
+
+	ctx := context.Background()
+	if _, err := c.OSVars().Create(ctx, OSVarCreate{Name: "tfacc-VAR", Content: "SECRET-SIX"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.OSVars().Read(ctx, idA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.OSVars().List(ctx); err != nil {
+		t.Fatal(err)
+	}
+	content := "SECRET-FIVE"
+	_, valued := c.OSVars().Update(ctx, OSVarUpdate{ID: idA, Content: &content})
+	_, tooLong := c.OSVars().Update(ctx, OSVarUpdate{ID: idA, Content: &content})
+	_, echoed := c.OSVars().Update(ctx, OSVarUpdate{ID: idA, Content: &content})
+	var apiErr *APIError
+	if !errors.As(valued, &apiErr) || tooLong == nil || echoed == nil {
+		t.Fatalf("valued = %v, tooLong = %v, echoed = %v, want three API errors", valued, tooLong, echoed)
+	}
+	if _, err := c.DNSRecords().Create(ctx, DNSRecordCreate{Domain: idC, Type: "TXT", Content: "tfacc-sent"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The answer that echoes the content in a message on another field is
+	// judged by its error only: a body is redacted by key, here as for a password.
+	logged := append((*logs)[:5:5], (*logs)[6])
+	all := strings.Join(logged, "\n") + "\n" + valued.Error() + "\n" + apiErr.Body + "\n" + echoed.Error()
+	for _, secret := range []string{"SECRET-ONE", "SECRET-TWO", "SECRET-THREE", "SECRET-FOUR", "SECRET-FIVE", "SECRET-SIX"} {
+		if strings.Contains(all, secret) {
+			t.Errorf("%q leaked into the log or an error", secret)
+		}
+	}
+	if !strings.Contains(tooLong.Error(), "content: Ensure this field has no more than 1024 characters.") {
+		t.Errorf("a validation error on the content must stay readable, got: %v", tooLong)
+	}
+	for _, shown := range []string{"tfacc-VAR", "tfacc-shown", "tfacc-sent"} {
+		if !strings.Contains(all, shown) {
+			t.Errorf("%q is not a secret and must stay in the log, got:\n%s", shown, all)
+		}
+	}
+}
+
 func TestValidationErrorOnSecretFieldStaysReadable(t *testing.T) {
 	f, c, _ := newFake(t)
 	f.on("POST", "/osuser/update/",
@@ -851,5 +979,18 @@ func TestThrottleSpacesRequests(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed < 60*time.Millisecond {
 		t.Errorf("4 requests took %v, want at least 60ms", elapsed)
+	}
+}
+
+func TestShortSecretDoesNotBlankEveryMessage(t *testing.T) {
+	f, c, _ := newFake(t)
+	f.on("POST", "/osvar/create/", reply{status: 400, body: `[{"name":["This field may not be blank."]}]`})
+
+	// An empty content is "contained" in every message, and a one-letter one in most.
+	for _, content := range []string{"", "a"} {
+		_, err := c.OSVars().Create(context.Background(), OSVarCreate{Name: "tfacc-VAR", Content: content})
+		if err == nil || !strings.Contains(err.Error(), "may not be blank") {
+			t.Errorf("content %q: the validation message was lost: %v", content, err)
+		}
 	}
 }

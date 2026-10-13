@@ -40,6 +40,11 @@ type fakeAPI struct {
 	bodies  []string // the request body of each write
 	// tune points a provider's client at this fake. fakeProvider sets it.
 	tune func(*client.Config)
+	// stored, when set, changes an object the way a write stores it, and
+	// answered the answer to a create only. They are for behaviour the API is
+	// not known to have, which the provider absorbs all the same.
+	stored   func(kind string, o obj)
+	answered func(kind string, answer obj)
 }
 
 // get returns a copy of an object as a read would report it once it is ready.
@@ -264,10 +269,16 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		maps.Copy(o, defaults[kind])
 		maps.Copy(o, req)
 		f.fill(kind, o, true)
+		if f.stored != nil {
+			f.stored(kind, o)
+		}
 		o["state"], o["ready"] = "PENDING_CREATE", false
 		f.objects[o["id"].(string)] = o
 		answer := public(o)
 		maps.Copy(answer, createOnly[kind])
+		if f.answered != nil {
+			f.answered(kind, answer)
+		}
 		reply(http.StatusOK, []obj{answer})
 		return
 	}
@@ -281,6 +292,9 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "update":
 		maps.Copy(o, req)
 		f.fill(kind, o, false)
+		if f.stored != nil {
+			f.stored(kind, o)
+		}
 		o["state"], o["ready"] = "PENDING_UPDATE", false
 		reply(http.StatusOK, []obj{public(o)})
 	case "delete":
@@ -288,6 +302,17 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(http.StatusOK, obj{"ok": "Queued for deletion."})
 	default:
 		notFound()
+	}
+}
+
+// trimmed is a stored hook: the kind's texts lose the white space around them.
+func trimmed(kind string, fields ...string) func(string, obj) {
+	return func(k string, o obj) {
+		for _, field := range fields {
+			if text, ok := o[field].(string); ok && k == kind {
+				o[field] = strings.TrimSpace(text)
+			}
+		}
 	}
 }
 
@@ -323,6 +348,18 @@ provider "opalstack" {
 }
 `, srv.URL+"/api/v1")
 	return f, factories, block
+}
+
+// keepOnRemove takes a resource out of the state and leaves the object alone.
+func keepOnRemove(address string) string {
+	return fmt.Sprintf(`
+removed {
+  from = %s
+  lifecycle {
+    destroy = false
+  }
+}
+`, address)
 }
 
 // expectEmptyPlan is for a step that must plan nothing at all.

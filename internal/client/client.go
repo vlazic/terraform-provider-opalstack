@@ -138,7 +138,7 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, out a
 			return nil
 		}
 		if err == nil {
-			err = newAPIError(method, path, status, respBody, c.secretsIn(body))
+			err = newAPIError(method, path, status, respBody, c.secretsIn(path, body))
 		}
 		if attempt == maxAttempts || !retryable(method, status) || ctx.Err() != nil {
 			return err
@@ -201,12 +201,13 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, body []byte
 		return 0, nil, 0, fmt.Errorf("opalstack: reading the response of %s %s: %w", method, path, err)
 	}
 
+	secret := secretKeysOf(path)
 	c.log(ctx, "opalstack request", map[string]any{
 		"method":   method,
 		"path":     path,
 		"status":   resp.StatusCode,
-		"request":  redactJSON(body),
-		"response": redactJSON(respBody),
+		"request":  redactJSON(body, secret),
+		"response": redactJSON(respBody, secret),
 	})
 
 	var retryAfter time.Duration

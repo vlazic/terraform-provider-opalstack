@@ -16,6 +16,11 @@
 - An update the API refuses because the object is still settling (400 `Not ready`) now waits for
   the object and is sent once more. It happened to a mailbox whose address changed in the same
   apply.
+- The content of an environment variable is kept out of the provider's debug log and out of the
+  body of an API error.
+- With `safety_prefix` set, an update or a delete of a variable is refused when the variable is
+  global already, or is given to a shell user that is neither prefixed nor the one
+  `safety_osuser_id` names, whatever the request itself says.
 
 ## 0.1.2 (2026-10-13)
 

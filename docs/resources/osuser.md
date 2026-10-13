@@ -4,14 +4,14 @@ page_title: "opalstack_osuser Resource - opalstack"
 subcategory: ""
 description: |-
   A shell user. Apps belong to one and run as it. Only its password can be changed in place, and deleting one deletes its home directory and every app that belongs to it.
-  Without a password the API chooses one and reports it once, in default_password. The API has no way to manage SSH keys.
+  The API chooses a password and reports it once, in default_password, whether or not the configuration gives a password of its own. The API has no way to manage SSH keys.
 ---
 
 # opalstack_osuser (Resource)
 
 A shell user. Apps belong to one and run as it. Only its password can be changed in place, and deleting one deletes its home directory **and every app that belongs to it**.
 
-Without a `password` the API chooses one and reports it once, in `default_password`. The API has no way to manage SSH keys.
+The API chooses a password and reports it once, in `default_password`, whether or not the configuration gives a `password` of its own. The API has no way to manage SSH keys.
 
 ## Example Usage
 
@@ -42,12 +42,12 @@ output "deploy_password" {
 
 ### Optional
 
-- `password` (String, Sensitive) Password of the shell user, for SSH and SFTP. Left out, the API chooses one and reports it in `default_password`. It can be changed in place. The API never returns it, so a password changed outside Terraform is not noticed, and taking the attribute out of the configuration changes nothing.
+- `password` (String, Sensitive) Password of the shell user, for SSH and SFTP. Left out, the only password is the one the API chooses and reports in `default_password`. It can be changed in place. The API never returns it, so a password changed outside Terraform is not noticed, and taking the attribute out of the configuration changes nothing.
 - `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 
 ### Read-Only
 
-- `default_password` (String, Sensitive) The password the API chose when it created the shell user. The API reports it only then, so it is null for a shell user that was imported. It stops working once `password` is set.
+- `default_password` (String, Sensitive) The password the API chose when it created the shell user. The API reports it only then, so it is null for a shell user that was imported. Once a `password` is set by an update, the API refuses this one. A shell user created with a `password` still gets one here, and whether it works for login as well was not tried: treat it as a second working credential held in the state.
 - `id` (String) UUID of the shell user.
 
 <a id="nestedatt--timeouts"></a>

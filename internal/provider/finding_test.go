@@ -34,7 +34,10 @@ type probe struct {
 	ctx    context.Context
 	base   string // the base domain for tests
 	osuser string // id of the sandbox shell user
+	// mask replaces what must not be read off a line the probe prints, and
+	// masked are its pairs: hide adds to them.
 	mask   *strings.Replacer
+	masked []string
 	// answered is the redacted body of the last answer to a create or an update.
 	answered string
 }
@@ -58,14 +61,55 @@ func newProbe(t *testing.T) *probe {
 	}
 	p.c = c
 	// Nothing of the account is to be read off a FINDING line.
-	p.mask = strings.NewReplacer(p.base, "<base>", accEnv(t, "OPALSTACK_TEST_OSUSER"), "<sandbox>")
+	p.hide(p.base, "<base>")
+	p.hide(accEnv(t, "OPALSTACK_TEST_OSUSER"), "<sandbox>")
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
 	t.Cleanup(cancel)
 	p.ctx = ctx
 	return p
 }
 
+// hide adds a value of the account to the mask for the rest of the test:
+// FINDING lines, failures and cleanup errors alike.
+func (p *probe) hide(value, as string) {
+	p.masked = append(p.masked, value, as)
+	p.mask = strings.NewReplacer(p.masked...)
+}
+
 var uuidInText = regexp.MustCompile(`[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}`)
+
+// ipInText matches an IPv4 or an IPv6 literal. It is loose on purpose: a time
+// of day matches too, and is better lost than an address printed.
+var ipInText = regexp.MustCompile(`(\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:]*::[0-9a-fA-F:]*|[0-9a-fA-F]{1,4}(:[0-9a-fA-F]{1,4}){2,7}`)
+
+// withoutAddress is for the text of a network error, which names the address
+// a host name resolved to.
+func withoutAddress(text, host string) string {
+	return ipInText.ReplaceAllString(strings.ReplaceAll(text, host, "<server>"), "<ip>")
+}
+
+func TestProbesPrintNoAddress(t *testing.T) {
+	for text, want := range map[string]string{
+		"dial tcp 192.0.2.10:22: connect: connection refused":             "dial tcp <ip>:22: connect: connection refused",
+		"dial tcp [2001:db8::10]:22: i/o timeout":                         "dial tcp [<ip>]:22: i/o timeout",
+		"read tcp 192.0.2.1:50000->192.0.2.10:22: read: connection reset": "read tcp <ip>:50000-><ip>:22: read: connection reset",
+		"dial tcp: lookup opal1.opalstack.com on [::1]:53: no such host":  "dial tcp: lookup <server> on [<ip>]:53: no such host",
+		"dial tcp [2001:db8:1::10]:22: i/o timeout":                       "dial tcp [<ip>]:22: i/o timeout",
+		"dial tcp [2001:db8:0:0:0:0:0:10]:22: i/o timeout":                "dial tcp [<ip>]:22: i/o timeout",
+		"ssh: handshake failed: EOF":                                      "ssh: handshake failed: EOF",
+	} {
+		if got := withoutAddress(text, "opal1.opalstack.com"); got != want {
+			t.Errorf("%q became %q, want %q", text, got, want)
+		}
+	}
+
+	p := &probe{t: t}
+	p.hide("example.com", "<base>")
+	p.hide("192.0.2.10", "<ip>")
+	if got := p.mask.Replace("tfacc-abc123.example.com A 192.0.2.10"); got != "tfacc-abc123.<base> A <ip>" {
+		t.Errorf("the mask left %q", got)
+	}
+}
 
 func (p *probe) find(format string, args ...any) {
 	p.t.Helper()
@@ -839,7 +883,7 @@ func TestFindingOSUserPassword(t *testing.T) {
 			if strings.Contains(err.Error(), "unable to authenticate") {
 				return "refused"
 			}
-			return "could not connect: " + strings.ReplaceAll(err.Error(), host, "<server>")
+			return "could not connect: " + withoutAddress(err.Error(), host)
 		}
 		_ = conn.Close()
 		return "accepted"
@@ -945,11 +989,13 @@ func TestFindingLetsEncrypt(t *testing.T) {
 	if address == "" {
 		t.Fatal("the sandbox server has no primary IPv4 address")
 	}
-	mask := func(s string) string { return strings.ReplaceAll(s, address, "<ip>") }
+	// For the whole test: the address is in the record, and so in what a
+	// failure or a cleanup may quote.
+	p.hide(address, "<ip>")
 
 	d := p.domain()
 	rec, err := p.c.DNSRecords().Create(p.ctx, client.DNSRecordCreate{Domain: d.ID, Type: "A", Content: address})
-	p.find("an A record for the test domain, pointing at the server: %s", mask(p.took(err)))
+	p.find("an A record for the test domain, pointing at the server: %s", p.took(err))
 	p.must(err)
 	later(p, p.c.DNSRecords(), rec.ID)
 	_, err = p.c.DNSRecords().WaitReady(p.ctx, rec.ID)

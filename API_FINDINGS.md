@@ -105,7 +105,10 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
   was `PENDING_CREATE`, and a `read` once the user was ready did not return `default_password`.
   So the password sent on create is ignored, and the server's one is available exactly once.
 - `default_password` is also returned when no `password` is sent (`TestAccOSUser`, 2026-10-12).
-  The provider sends none and exposes the value as a sensitive computed attribute.
+  The provider sends the configured `password` when there is one, and exposes the value as a
+  sensitive computed attribute either way.
+- **Correction to the two bullets above:** a password sent on create is not ignored. See the
+  bullet of 2026-10-13 that follows: the differing `default_password` was misread.
 - **A password set through the API works** (`TestFindingOSUserPassword`, 2026-10-13, by logging
   in over SSH as a test shell user). A password set through update is accepted for login, and the
   `default_password` of the create is refused from then on. A password sent on create is accepted
@@ -310,9 +313,9 @@ The two engines have the same shape under different paths (spec; `TestFindingMar
   keeps its value: switching the autoresponder off keeps its subject, message and list, and a
   password change touches none of them. An empty string or an empty list clears a field.
 - **`procmailrc` comes back without its trailing newline**: `"# tfacc\n"` is stored as `"# tfacc"`.
-- **UNVERIFIED:** whether `autoresponder_message` loses white space around it as well: the probe
-  sent none. The resource accepts either answer for both texts, and the filter steps of
-  `TestAccMail` send a message that ends in a newline.
+- **UNVERIFIED:** whether `autoresponder_message` and `autoresponder_subject` lose white space
+  around them as well: the probe sent none. The resource accepts either answer for all three
+  texts, and the filter steps of `TestAccMail` send a message that ends in a newline.
 - **An update of an object that is still settling answers 400 `id: Not ready.`** Seen on
   2026-10-13 in `TestAccMail`: a mailbox was pending while an address that delivered to it was
   being changed in the same apply, and the mailbox's own update was refused. The client waits for
@@ -339,10 +342,15 @@ The two engines have the same shape under different paths (spec; `TestFindingMar
   then belongs to nobody.
 - **A name is not unique**: a second variable with the same name for the same shell user is
   accepted. Which of the two the shell user gets was not looked at.
-- The content is returned by every read, in the clear.
-- For the safety prefix a variable is judged by its own name and by the shell users it names. A
-  global one is refused while the prefix is set, and the tests never create one, so
-  **`global = true` is unverified against the live API**.
+- The content is returned by every read, in the clear. The client redacts it in its debug log
+  and in error bodies, for the `/osvar/` paths only.
+- **UNVERIFIED:** whether `content` loses white space around it, as `procmailrc` loses its
+  trailing newline: the probe sent none. The resource absorbs it either way: the state keeps the
+  content as written when the API's differs only in that, and such a difference plans nothing.
+- For the safety prefix a variable is judged by its own name and by the shell users it names:
+  those in the request and, for an update or a delete, those it has now. A global one is refused
+  while the prefix is set, whether the request would make it global or it is global already, and
+  the tests never create one, so **`global = true` is unverified against the live API**.
 
 ### cert
 

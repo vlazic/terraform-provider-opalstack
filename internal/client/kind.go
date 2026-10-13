@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -24,6 +25,11 @@ type ReadKind[T any] struct {
 	// nameless marks a kind whose objects have no name of their own. Such an
 	// object is judged by the name of the object its first ref points at.
 	nameless bool
+	// heldToo marks a kind whose existing object is judged by what it holds now
+	// as well as by what the request would give it: the objects its refs name
+	// today, and whether it is global. An update that names neither would
+	// otherwise change, and a delete take away, something no name vouches for.
+	heldToo bool
 }
 
 // ref is a field holding the id of an object of another kind. path is dotted:
@@ -121,10 +127,11 @@ func (k Kind[T, C, U]) Update(ctx context.Context, req U) (*T, error) {
 }
 
 // notReadyID returns the id of the request when err is the API's refusal to
-// change an object that is not ready, and "" otherwise.
+// change an object that is not ready, and "" otherwise. The refusal is a
+// message on the id: the same words about another field are a validation error.
 func notReadyID(err error, req any) string {
 	var apiErr *APIError
-	if !errors.As(err, &apiErr) || apiErr.Status != 400 || !strings.Contains(apiErr.Body, "Not ready") {
+	if !errors.As(err, &apiErr) || apiErr.Status != 400 || !slices.Contains(apiErr.Messages, "id: Not ready.") {
 		return ""
 	}
 	raw, _ := json.Marshal(req)
@@ -226,7 +233,9 @@ func (k Kind[T, C, U]) postOne(ctx context.Context, verb string, req any) (*T, e
 //   - a request with a "name" creates or renames, and the new name is checked;
 //   - every object the request refers to through one of the kind's refs, such
 //     as the domains and apps of a site, is checked on its name too. The one
-//     exception is a ref's exempt id.
+//     exception is a ref's exempt id;
+//   - for a kind marked heldToo, the existing object is checked the same way
+//     on what it holds now, and refused when it is global.
 //
 // Anything it cannot establish is a refusal. A refusal never matches
 // ErrNotFound, even when a lookup failed that way: the object the caller asked
@@ -280,29 +289,46 @@ func (k Kind[T, C, U]) guard(ctx context.Context, verb string, req any) error {
 			return err
 		}
 	}
+	// judged are the objects whose refs are followed: the request, and for a
+	// kind marked heldToo the object as it is now.
+	judged := []map[string]any{fields}
 	if id != "" {
-		name, err := k.nameOf(ctx, id)
+		obj, err := read[map[string]any](ctx, k.c, k.name, id)
+		if err != nil {
+			return refuse("cannot read %s to check its name: %v", id, err)
+		}
+		name, err := k.nameIn(ctx, id, *obj)
 		if err != nil {
 			return refuse("cannot read %s to check its name: %v", id, err)
 		}
 		if err := check("its current name", name); err != nil {
 			return err
 		}
+		if k.heldToo {
+			// Whatever the request says: one that sets global to false still
+			// changes what every shell user has today.
+			if global, _ := (*obj)["global"].(bool); global {
+				return refuse("it is global now, and reaches every shell user of the account")
+			}
+			judged = append(judged, *obj)
+		}
 	}
 	seen := map[ref]bool{} // a site may route several paths to one app
 	for _, r := range k.refs {
-		for _, refID := range r.ids(fields) {
-			target := ref{kind: r.kind, path: refID}
-			if (r.exempt != "" && refID == r.exempt) || seen[target] {
-				continue
-			}
-			seen[target] = true
-			name, err := k.other(r.kind).nameOf(ctx, refID)
-			if err != nil {
-				return refuse("cannot read %s %s to check its name: %v", r.kind, refID, err)
-			}
-			if err := check("the name of the "+r.kind+" it refers to", name); err != nil {
-				return err
+		for _, from := range judged {
+			for _, refID := range r.ids(from) {
+				target := ref{kind: r.kind, path: refID}
+				if (r.exempt != "" && refID == r.exempt) || seen[target] {
+					continue
+				}
+				seen[target] = true
+				name, err := k.other(r.kind).nameOf(ctx, refID)
+				if err != nil {
+					return refuse("cannot read %s %s to check its name: %v", r.kind, refID, err)
+				}
+				if err := check("the name of the "+r.kind+" it refers to", name); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -328,15 +354,20 @@ func (k ReadKind[T]) nameOf(ctx context.Context, id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return k.nameIn(ctx, id, *obj)
+}
+
+// nameIn is nameOf for an object that has been read already.
+func (k ReadKind[T]) nameIn(ctx context.Context, id string, obj map[string]any) (string, error) {
 	if k.nameless {
 		parent := k.refs[0]
-		ids := parent.ids(*obj)
+		ids := parent.ids(obj)
 		if len(ids) != 1 {
 			return "", fmt.Errorf("opalstack: %s %s has no %s", k.name, id, parent.path)
 		}
 		return k.other(parent.kind).nameOf(ctx, ids[0])
 	}
-	name, _ := (*obj)[k.nameKey()].(string)
+	name, _ := obj[k.nameKey()].(string)
 	if name == "" {
 		return "", fmt.Errorf("opalstack: %s %s has no name", k.name, id)
 	}

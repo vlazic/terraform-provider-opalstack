@@ -39,8 +39,8 @@ func (r *osuserResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "A shell user. Apps belong to one and run as it. Only its password can be changed in " +
 			"place, and deleting one deletes its home directory **and every app that belongs to it**.\n\n" +
-			"Without a `password` the API chooses one and reports it once, in `default_password`. The API has " +
-			"no way to manage SSH keys.",
+			"The API chooses a password and reports it once, in `default_password`, whether or not the " +
+			"configuration gives a `password` of its own. The API has no way to manage SSH keys.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "UUID of the shell user.",
@@ -58,16 +58,19 @@ func (r *osuserResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"password": schema.StringAttribute{
-				MarkdownDescription: "Password of the shell user, for SSH and SFTP. Left out, the API chooses one and " +
-					"reports it in `default_password`. It can be changed in place. The API never returns it, so a " +
-					"password changed outside Terraform is not noticed, and taking the attribute out of the " +
-					"configuration changes nothing.",
+				MarkdownDescription: "Password of the shell user, for SSH and SFTP. Left out, the only password is " +
+					"the one the API chooses and reports in `default_password`. It can be changed in place. The " +
+					"API never returns it, so a password changed outside Terraform is not noticed, and taking " +
+					"the attribute out of the configuration changes nothing.",
 				Optional:  true,
 				Sensitive: true,
 			},
 			"default_password": schema.StringAttribute{
 				MarkdownDescription: "The password the API chose when it created the shell user. The API reports it only " +
-					"then, so it is null for a shell user that was imported. It stops working once `password` is set.",
+					"then, so it is null for a shell user that was imported. Once a `password` is set by an " +
+					"update, the API refuses this one. A shell user created with a `password` still gets one " +
+					"here, and whether it works for login as well was not tried: treat it as a second working " +
+					"credential held in the state.",
 				Computed:      true,
 				Sensitive:     true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},

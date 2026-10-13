@@ -64,10 +64,10 @@ func (d *dbUserDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 		return
 	}
 
-	m.ID = types.StringValue(user.ID)
-	m.Name = types.StringValue(user.Name)
-	m.ServerID = types.StringValue(user.Server)
-	m.External = types.BoolValue(user.External)
+	// The resource's model does the conversion, so the two cannot drift apart.
+	var full dbUserModel
+	full.set(user)
+	m = dbUserDataModel{ID: full.ID, Name: full.Name, ServerID: full.ServerID, External: full.External}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }
 

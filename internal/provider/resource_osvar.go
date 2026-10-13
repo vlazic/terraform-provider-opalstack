@@ -66,13 +66,14 @@ func (r *osVarResource) Schema(ctx context.Context, _ resource.SchemaRequest, re
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"content": schema.StringAttribute{
-				MarkdownDescription: "Value of the variable, at most 1024 characters. Left out, a new variable is " +
-					"empty and an existing one keeps the value the API has.",
+				MarkdownDescription: "Value of the variable, at most 1024 characters. White space around it is " +
+					"not shown as a change. Left out, a new variable is empty and an existing one keeps the " +
+					"value the API has.",
 				Optional:      true,
 				Computed:      true,
 				Sensitive:     true,
 				Validators:    []validator.String{stringvalidator.LengthAtMost(1024)},
-				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown(), sameText{}},
 			},
 			"osuser_ids": idSetAttribute("UUIDs of the shell users the variable is given to. It may be empty: " +
 				"the variable then belongs to nobody."),
@@ -90,11 +91,14 @@ func (r *osVarResource) Schema(ctx context.Context, _ resource.SchemaRequest, re
 	}
 }
 
+// set copies what a read returns. The content is kept as written when it
+// differs from the API's only in the white space around it. Whether the API
+// trims it is not verified: this costs nothing if it does not.
 func (m *osVarModel) set(ctx context.Context, v *client.OSVar) diag.Diagnostics {
 	var diags diag.Diagnostics
 	m.ID = types.StringValue(v.ID)
 	m.Name = types.StringValue(v.Name)
-	m.Content = types.StringValue(v.Content)
+	m.Content = keptText(m.Content, types.StringValue(v.Content))
 	m.OSUserIDs = stringSet(ctx, v.OSUsers, &diags)
 	m.Global = types.BoolValue(v.Global)
 	return diags

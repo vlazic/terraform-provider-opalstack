@@ -36,7 +36,7 @@ resource "opalstack_osvar" "node_env" {
 
 ### Optional
 
-- `content` (String, Sensitive) Value of the variable, at most 1024 characters. Left out, a new variable is empty and an existing one keeps the value the API has.
+- `content` (String, Sensitive) Value of the variable, at most 1024 characters. White space around it is not shown as a change. Left out, a new variable is empty and an existing one keeps the value the API has.
 - `global` (Boolean) Whether the variable is given to every shell user of the account, present and future. Left out, a new variable is not global and an existing one stays as the API has it. This has not been verified against the live API, and the provider refuses it while `safety_prefix` is set.
 - `osuser_ids` (Set of String) UUIDs of the shell users the variable is given to. It may be empty: the variable then belongs to nobody. Left out, the list is empty on a new object and is left as it is on an existing one.
 - `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))

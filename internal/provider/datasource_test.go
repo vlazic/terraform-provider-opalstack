@@ -49,7 +49,9 @@ func seedAccount(f *fakeAPI) {
 		"key": "PRIVATE", "sha256_fingerprint": "AA:BB"})
 	f.seed("cert", obj{"id": cert2ID, "name": "renewed", "cert": "one\n", "key": "PRIVATE"})
 	f.seed("cert", obj{"id": cert3ID, "name": "renewed", "cert": "two\n", "key": "PRIVATE"})
-	f.seed("mailuser", obj{"id": boxID, "name": "info", "imap_server": imapID})
+	f.seed("mailuser", obj{"id": boxID, "name": "info", "imap_server": imapID, "procmailrc": ":0\ninfo/",
+		"autoresponder_enable": true, "autoresponder_subject": "Away", "autoresponder_message": "Back on Monday.",
+		"autoresponder_noreply": []any{"list@example.org"}})
 	f.seed("address", obj{"id": addrID, "source": "info@example.com", "destinations": []any{boxID}, "forwards": []any{"someone@example.org"}})
 	f.seed("mariauser", obj{"id": mariaUID, "name": "shop", "server": serverID, "external": true})
 	f.seed("mariadb", obj{"id": mariaID, "name": "shop", "server": serverID, "charset": "utf8mb4", "dbusers_readwrite": []any{mariaUID}})
@@ -137,6 +139,13 @@ data "opalstack_psqldb" "by_id" { id = data.opalstack_psqldb.db.id }
 				resource.TestCheckResourceAttr("data.opalstack_mailuser.m", "id", boxID),
 				resource.TestCheckResourceAttr("data.opalstack_mailuser.m", "imap_server_id", imapID),
 				resource.TestCheckNoResourceAttr("data.opalstack_mailuser.m", "password"),
+				resource.TestCheckResourceAttr("data.opalstack_mailuser.m", "procmailrc", ":0\ninfo/"),
+				resource.TestCheckResourceAttr("data.opalstack_mailuser.m", "autoresponder_enable", "true"),
+				resource.TestCheckResourceAttr("data.opalstack_mailuser.m", "autoresponder_subject", "Away"),
+				resource.TestCheckResourceAttr("data.opalstack_mailuser.m", "autoresponder_message", "Back on Monday."),
+				resource.TestCheckResourceAttr("data.opalstack_mailuser.m", "autoresponder_noreply.#", "1"),
+				resource.TestCheckTypeSetElemAttr("data.opalstack_mailuser.m", "autoresponder_noreply.*", "list@example.org"),
+				resource.TestCheckResourceAttr("data.opalstack_mailuser.by_id", "procmailrc", ":0\ninfo/"),
 				resource.TestCheckResourceAttr("data.opalstack_mailuser.by_id", "name", "info"),
 				resource.TestCheckResourceAttr("data.opalstack_address.a", "id", addrID),
 				resource.TestCheckTypeSetElemAttr("data.opalstack_address.a", "mailuser_ids.*", boxID),

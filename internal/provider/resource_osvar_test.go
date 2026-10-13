@@ -113,3 +113,71 @@ resource "opalstack_osvar" "v" {
 		}},
 	})
 }
+
+// Whether the API trims the content is not verified. If it does, a content
+// that ends in a newline, as one read from a file does, must not be a change.
+func TestOSVarContentKeepsItsWhiteSpace(t *testing.T) {
+	f, factories, block := fakeProvider(t)
+	f.stored = trimmed("osvar", "content")
+	const addr = "opalstack_osvar.v"
+	config := func(content string) string {
+		return block + fmt.Sprintf(`
+resource "opalstack_osvar" "v" {
+  name    = "tfacc-VAR"
+  content = %q
+}
+`, content)
+	}
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: config("one\n"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "content", "one\n"), // as written
+					func(*terraform.State) error {
+						if got := f.get(f.ids("osvar")[0])["content"]; got != "one" {
+							return fmt.Errorf("the fake stores the content as %q", got)
+						}
+						return nil
+					},
+				),
+			},
+			{Config: config("one\n"), ConfigPlanChecks: expectEmptyPlan()},
+			{ // another content is still a change, and is kept as written too
+				Config:           config(" two\n"),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionUpdate),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "content", " two\n"),
+					f.sent("osvar/update", []string{`"content":" two\n"`}, nil),
+				),
+			},
+		},
+	})
+
+	// Adopted, the state holds what the API has, and the configuration still
+	// changes nothing.
+	f.seed("osvar", obj{"id": recordID, "name": "tfacc-HELD", "content": "one"})
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: block + `
+import {
+  to = opalstack_osvar.v
+  id = "tfacc-HELD"
+}
+resource "opalstack_osvar" "v" {
+  name    = "tfacc-HELD"
+  content = "one\n"
+}
+`,
+				Check: resource.TestCheckResourceAttr(addr, "content", "one"),
+			},
+			{Config: block + keepOnRemove("opalstack_osvar.v")},
+		},
+	})
+	if n := f.wrote("osvar/update"); n != 1 {
+		t.Errorf("%d updates were sent, want the one that changed the content", n)
+	}
+}

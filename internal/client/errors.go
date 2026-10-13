@@ -55,9 +55,12 @@ type APIError struct {
 // redacts bare values under such keys, and a message that echoes one of the
 // secrets is dropped here.
 func newAPIError(method, path string, status int, body []byte, secrets []string) *APIError {
-	e := &APIError{Method: method, Path: path, Status: status, Body: redactJSON(body)}
-	for _, msg := range errorMessages(body) {
-		if slices.ContainsFunc(secrets, func(s string) bool { return strings.Contains(msg, s) }) {
+	secret := secretKeysOf(path)
+	e := &APIError{Method: method, Path: path, Status: status, Body: redactJSON(body, secret)}
+	for _, msg := range errorMessages(body, secret) {
+		// A value too short to be told from ordinary words is not looked for: an
+		// empty or one-letter content would blank every message.
+		if slices.ContainsFunc(secrets, func(s string) bool { return len(s) >= minEchoedSecret && strings.Contains(msg, s) }) {
 			msg = redacted
 		}
 		e.Messages = append(e.Messages, msg)
@@ -95,51 +98,51 @@ func (e *APIError) Is(target error) bool {
 //
 // Under a secret-looking key, a string inside a list is taken as a validation
 // message, which is how the API reports field errors, and a bare string is taken
-// as a value and redacted.
-func errorMessages(body []byte) []string {
+// as a value and redacted. secret is the rule for such keys: see secretKeysOf.
+func errorMessages(body []byte, secret func(string) bool) []string {
 	var v any
 	if json.Unmarshal(body, &v) != nil {
 		return nil
 	}
 	var out []string
-	collectMessages("", v, false, &out)
+	collectMessages("", v, false, secret, &out)
 	return out
 }
 
-func collectMessages(field string, v any, inList bool, out *[]string) {
+func collectMessages(field string, v any, inList bool, secret func(string) bool, out *[]string) {
 	switch t := v.(type) {
 	case string:
 		switch {
 		case field == "" || field == "detail" || field == "errors" || field == "non_field_errors":
 			*out = append(*out, t)
-		case secretKey.MatchString(field) && !inList:
+		case secret(field) && !inList:
 			*out = append(*out, field+": "+redacted)
 		default:
 			*out = append(*out, field+": "+t)
 		}
 	case []any:
 		for _, item := range t {
-			collectMessages(field, item, field != "", out)
+			collectMessages(field, item, field != "", secret, out)
 		}
 	case map[string]any:
 		for _, k := range slices.Sorted(maps.Keys(t)) {
-			collectMessages(k, t[k], false, out)
+			collectMessages(k, t[k], false, secret, out)
 		}
 	}
 }
 
-// secretsIn returns the token and every string a request carries under a
-// secret-looking key, which is what an error body could echo back.
-func (c *Client) secretsIn(request []byte) []string {
+// secretsIn returns the token and every string a request to path carries under
+// a secret-looking key, which is what an error body could echo back.
+func (c *Client) secretsIn(path string, request []byte) []string {
 	secrets := []string{c.cfg.Token}
 	var v any
 	if json.Unmarshal(request, &v) == nil {
-		collectSecrets(v, false, &secrets)
+		collectSecrets(v, false, secretKeysOf(path), &secrets)
 	}
 	return secrets
 }
 
-func collectSecrets(v any, underSecretKey bool, out *[]string) {
+func collectSecrets(v any, underSecretKey bool, secret func(string) bool, out *[]string) {
 	switch t := v.(type) {
 	case string:
 		if underSecretKey && t != "" {
@@ -147,11 +150,11 @@ func collectSecrets(v any, underSecretKey bool, out *[]string) {
 		}
 	case []any:
 		for _, item := range t {
-			collectSecrets(item, underSecretKey, out)
+			collectSecrets(item, underSecretKey, secret, out)
 		}
 	case map[string]any:
 		for k, val := range t {
-			collectSecrets(val, underSecretKey || secretKey.MatchString(k), out)
+			collectSecrets(val, underSecretKey || secret(k), secret, out)
 		}
 	}
 }
@@ -162,12 +165,28 @@ var secretKey = regexp.MustCompile(`(?i)password|secret|key|token`)
 // same rule the client redacts its own logs and errors with.
 func IsSecretKey(key string) bool { return secretKey.MatchString(key) }
 
+// secretKeysOf returns the rule for the keys of a body sent to path or received
+// from it. A name says nothing about the content of an environment variable,
+// which is as likely a secret as not, so under /osvar/ it is one. Elsewhere
+// content stays readable: it is also the value of a DNS record.
+func secretKeysOf(path string) func(string) bool {
+	if strings.HasPrefix(path, "/osvar/") {
+		return func(key string) bool { return key == "content" || secretKey.MatchString(key) }
+	}
+	return secretKey.MatchString
+}
+
 const redacted = "REDACTED"
 
-// redactJSON returns body with the value of every secret-looking key replaced.
-// The pattern is broad on purpose: it also covers dkim_privkey, which the API
-// returns in every domain response. A body that is not JSON is returned as is.
-func redactJSON(body []byte) string {
+// minEchoedSecret is the shortest secret value that an error message is
+// searched for.
+const minEchoedSecret = 6
+
+// redactJSON returns body with the value of every key that secret matches
+// replaced. The pattern is broad on purpose: it also covers dkim_privkey, which
+// the API returns in every domain response. A body that is not JSON is
+// returned as is.
+func redactJSON(body []byte, secret func(string) bool) string {
 	if len(body) == 0 {
 		return ""
 	}
@@ -175,25 +194,25 @@ func redactJSON(body []byte) string {
 	if json.Unmarshal(body, &v) != nil {
 		return string(body)
 	}
-	out, err := json.Marshal(redactValue(v))
+	out, err := json.Marshal(redactValue(v, secret))
 	if err != nil {
 		return redacted
 	}
 	return string(out)
 }
 
-func redactValue(v any) any {
+func redactValue(v any, secret func(string) bool) any {
 	switch t := v.(type) {
 	case []any:
 		for i := range t {
-			t[i] = redactValue(t[i])
+			t[i] = redactValue(t[i], secret)
 		}
 	case map[string]any:
 		for k, val := range t {
-			if secretKey.MatchString(k) && val != nil {
+			if secret(k) && val != nil {
 				t[k] = redacted
 			} else {
-				t[k] = redactValue(val)
+				t[k] = redactValue(val, secret)
 			}
 		}
 	}
