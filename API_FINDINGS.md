@@ -278,6 +278,10 @@ The two engines have the same shape under different paths (spec; `TestFindingMar
 - **UNVERIFIED:** whether `autoresponder_message` loses white space around it as well: the probe
   sent none. The resource accepts either answer for both texts, and the filter steps of
   `TestAccMail` send a message that ends in a newline.
+- **An update of an object that is still settling answers 400 `id: Not ready.`** Seen on
+  2026-10-13 in `TestAccMail`: a mailbox was pending while an address that delivered to it was
+  being changed in the same apply, and the mailbox's own update was refused. The client waits for
+  the object and sends the update once more (`Kind.Update`).
 - `/mailuser/update_public/` is the mailbox owner's own change, with the current password. The
   provider does not call it.
 - For the safety prefix an address is judged by its `source`, and by the names of the mailboxes
