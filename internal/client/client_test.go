@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -914,7 +915,7 @@ func TestLogsRedactTheContentOfAVariable(t *testing.T) {
 
 	// The answer that echoes the content in a message on another field is
 	// judged by its error only: a body is redacted by key, here as for a password.
-	logged := append((*logs)[:5:5], (*logs)[6])
+	logged := slices.Concat((*logs)[:5], (*logs)[6:7])
 	all := strings.Join(logged, "\n") + "\n" + valued.Error() + "\n" + apiErr.Body + "\n" + echoed.Error()
 	for _, secret := range []string{"SECRET-ONE", "SECRET-TWO", "SECRET-THREE", "SECRET-FOUR", "SECRET-FIVE", "SECRET-SIX"} {
 		if strings.Contains(all, secret) {

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-10-14)
 
 - New resource `opalstack_osvar`: an environment variable of shell users. `global = true` has not
   been verified against the live API.

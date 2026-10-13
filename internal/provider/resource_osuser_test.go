@@ -9,7 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
-func osuserConfig(name, serverID string) string {
+func osuserConfig(name string) string {
 	return fmt.Sprintf(`
 resource "opalstack_osuser" "u" {
   name      = %q
@@ -18,7 +18,7 @@ resource "opalstack_osuser" "u" {
 `, name, serverID)
 }
 
-func osuserWithPassword(name, serverID, password string) string {
+func osuserWithPassword(name, password string) string {
 	return fmt.Sprintf(`
 resource "opalstack_osuser" "u" {
   name      = %q
@@ -42,7 +42,7 @@ func TestOSUserResource(t *testing.T) {
 		},
 		Steps: []resource.TestStep{
 			{
-				Config: block + osuserConfig("tfacc-one", serverID),
+				Config: block + osuserConfig("tfacc-one"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(addr, "name", "tfacc-one"),
 					resource.TestCheckResourceAttr(addr, "server_id", serverID),
@@ -53,12 +53,12 @@ func TestOSUserResource(t *testing.T) {
 			{ResourceName: addr, ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"default_password"}},
 			{ResourceName: addr, ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"default_password"}, ImportStateId: "tfacc-one"},
 			{ // an unchanged config plans nothing and keeps the password
-				Config:             block + osuserConfig("tfacc-one", serverID),
+				Config:             block + osuserConfig("tfacc-one"),
 				PlanOnly:           true,
 				ExpectNonEmptyPlan: false,
 			},
 			{ // a password is set in place, and nothing else is sent with it
-				Config:           block + osuserWithPassword("tfacc-one", serverID, "tfacc-password-one"),
+				Config:           block + osuserWithPassword("tfacc-one", "tfacc-password-one"),
 				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionUpdate),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(addr, "default_password", "fake-default-password"),
@@ -66,7 +66,7 @@ func TestOSUserResource(t *testing.T) {
 				),
 			},
 			{ // taken out of the configuration again: no request, the shell user keeps it
-				Config:           block + osuserConfig("tfacc-one", serverID),
+				Config:           block + osuserConfig("tfacc-one"),
 				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionUpdate),
 				Check: func(*terraform.State) error {
 					if n := f.wrote("osuser/update"); n != 1 {
@@ -76,12 +76,12 @@ func TestOSUserResource(t *testing.T) {
 				},
 			},
 			{ // a new name replaces the shell user
-				Config:           block + osuserConfig("tfacc-two", serverID),
+				Config:           block + osuserConfig("tfacc-two"),
 				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
 				Check:            resource.TestCheckResourceAttr(addr, "default_password", "fake-default-password"),
 			},
 			{ // created with a password: the create carries it, and the state holds the API's own as well
-				Config:           block + osuserWithPassword("tfacc-three", serverID, "tfacc-password-two"),
+				Config:           block + osuserWithPassword("tfacc-three", "tfacc-password-two"),
 				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(addr, "password", "tfacc-password-two"),

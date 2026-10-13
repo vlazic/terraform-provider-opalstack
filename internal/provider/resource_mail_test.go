@@ -319,7 +319,8 @@ func setFilter(f *fakeAPI, id string) {
 }
 
 // checkFilterRead is what the state must hold for such a mailbox.
-func checkFilterRead(addr string) resource.TestCheckFunc {
+func checkFilterRead() resource.TestCheckFunc {
+	const addr = "opalstack_mailuser.m"
 	return resource.ComposeAggregateTestCheckFunc(
 		resource.TestCheckResourceAttr(addr, "procmailrc", filterRules),
 		resource.TestCheckResourceAttr(addr, "autoresponder_enable", "true"),
@@ -350,17 +351,17 @@ import {
   id = "info"
 }
 ` + resourceBlock,
-				Check: checkFilterRead(box),
+				Check: checkFilterRead(),
 			},
 			{
 				Config:           block + resourceBlock,
 				ConfigPlanChecks: expectEmptyPlan(),
-				Check:            checkFilterRead(box),
+				Check:            checkFilterRead(),
 			},
 			{ // naming what the mailbox already has is no change either, although the heredoc ends in a newline
 				Config:           block + strings.Replace(resourceBlock, "}\n", filterConfig+"}\n", 1),
 				ConfigPlanChecks: expectEmptyPlan(),
-				Check:            checkFilterRead(box),
+				Check:            checkFilterRead(),
 			},
 			{Config: block + keepOnRemove(box)},
 		},
@@ -465,7 +466,7 @@ func TestMailUserUpgradeFrom012(t *testing.T) {
 				Config:                   config(""),
 				ConfigPlanChecks:         expectEmptyPlan(),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					checkFilterRead(box),
+					checkFilterRead(),
 					func(*terraform.State) error {
 						if n := f.wrote("mailuser/update"); n != 0 {
 							return fmt.Errorf("%d updates were sent by an upgrade", n)
@@ -490,7 +491,7 @@ func TestMailUserUpgradeFrom012(t *testing.T) {
 					plancheck.ExpectKnownValue(box, tfjsonpath.New("autoresponder_noreply"), knownvalue.SetExact([]knownvalue.Check{knownvalue.StringExact("list@example.org")})),
 				}},
 				Check: resource.ComposeAggregateTestCheckFunc(
-					checkFilterRead(box),
+					checkFilterRead(),
 					f.sent("mailuser/update", []string{"first-Password1"}, []string{"procmailrc", "autoresponder"}),
 				),
 			},
@@ -526,7 +527,7 @@ func TestMailUserUpgradeFrom012Unrefreshed(t *testing.T) {
 				ProtoV6ProviderFactories: factories,
 				Config:                   block + boxConfig(password),
 				ConfigPlanChecks:         expectEmptyPlan(),
-				Check:                    checkFilterRead(box),
+				Check:                    checkFilterRead(),
 			},
 		},
 	})

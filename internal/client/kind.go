@@ -121,7 +121,7 @@ func (k Kind[T, C, U]) Update(ctx context.Context, req U) (*T, error) {
 		return out, err
 	}
 	if _, waitErr := k.WaitReady(ctx, id); waitErr != nil {
-		return nil, fmt.Errorf("%w; and waiting for it to be ready failed: %v", err, waitErr)
+		return nil, fmt.Errorf("%w; and waiting for it to be ready failed: %w", err, waitErr)
 	}
 	return k.postOne(ctx, "update", req)
 }

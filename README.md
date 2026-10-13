@@ -3,14 +3,11 @@
 A Terraform and OpenTofu provider for [Opalstack](https://www.opalstack.com) managed hosting, built
 on terraform-plugin-framework. Opalstack is unrelated to Opal (opal.dev).
 
-**Status: early. Version 0.1 is released and 0.2 is not yet (see [`CHANGELOG.md`](CHANGELOG.md)).**
+**Status: early. Version 0.2 is released (see [`CHANGELOG.md`](CHANGELOG.md)).**
 It is a personal project, not an Opalstack product. Thirteen resources and fourteen data sources
-exist and are documented in [`docs/`](docs/index.md). The twelve resources of version 0.1 pass
-acceptance tests against a real account. Version 0.2 adds `opalstack_osvar`, a mailbox's filter
-rules and autoresponder, a settable password on `opalstack_osuser`, and eight data sources. The
-acceptance tests of `opalstack_osvar`, `opalstack_mailuser` and `opalstack_osuser` passed against
-the real account on 2026-10-13; the eight data sources are tested offline against a fake API, and
-`global = true` on a variable is unverified.
+exist and are documented in [`docs/`](docs/index.md). Every resource passes acceptance tests
+against a real account, last run on 2026-10-14. The eight data sources added in version 0.2 are
+tested offline against a fake API, and `global = true` on an `opalstack_osvar` is unverified.
 [`PLAN.md`](PLAN.md) says what is decided and what comes next.
 
 ```hcl
