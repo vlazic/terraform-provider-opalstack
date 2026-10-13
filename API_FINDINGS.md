@@ -223,6 +223,20 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
   minutes watched, no DNS record appears, and turning `generate_le` off again is accepted. Nothing
   on the site says that no certificate was issued; the runbook's note about `/notice/list/` is the
   only place to look.
+- **A site created with `generate_le: true` for a domain that resolves to the server gets a
+  certificate by itself** (`TestFindingLetsEncrypt`, 2026-10-13). The test domain was given an `A`
+  record for the server's address, which resolved at once. The site became `READY` with `cert`
+  null; about three and a half minutes later it went to `PENDING_UPDATE` on its own and then named
+  a certificate. That certificate is an ordinary `cert` object, named `<name>_LE_<yyyymmdd>`, valid
+  for ninety days, with intermediates. Turning `generate_le` off afterwards is accepted, the site
+  keeps naming the certificate, and the certificate object stays.
+  - For the resource: `cert_id` is optional and computed, so the certificate appears on the next
+    refresh without a diff. A plan made in those first minutes does not show it yet, and an
+    update sent while the site is `PENDING_UPDATE` is the `Not ready` case the client waits out.
+  - The probe deleted the certificate itself, while the site still named it, and that was
+    accepted. Whether deleting the site alone would have removed it is not known.
+  - Not observed: a renewal. The date in the name suggests a renewed certificate is a new object
+    with a new id, which would show as a changed `cert_id` on refresh and nothing more.
 - Order of `routes` and `domains`: not relied upon. The resource models both as sets.
 
 ### dnsrecord
@@ -513,8 +527,7 @@ settings per type, and `generate_le` on a domain that does not resolve.
 Still open:
 
 1. Which `json` keys exist beyond the eighteen found, and which app type acts on which.
-3. `generate_le` for a domain that does resolve to the server: when `cert` appears, and whether a
-   renewal replaces the certificate object.
+3. Whether a Let's Encrypt renewal replaces the certificate object. It cannot be seen in a day.
 4. `delegated_dns_zone` set in place: refused for every name that has an ancestor domain in the
    account, which every test domain has.
 5. Names are unique per shell user for apps and account-wide for domains (both seen refused).
