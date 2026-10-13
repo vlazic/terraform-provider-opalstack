@@ -103,8 +103,36 @@ func (k Kind[T, C, U]) Create(ctx context.Context, req C) (*T, error) {
 }
 
 // Update sends the fields set on req and leaves every other field as it is.
+//
+// The API refuses to change an object that is still settling, with 400
+// "Not ready". That happens to an object nobody is updating: a mailbox is
+// pending while an address that delivered to it changes. A refused update
+// changed nothing, so it is safe to wait for the object and send it once more.
 func (k Kind[T, C, U]) Update(ctx context.Context, req U) (*T, error) {
+	out, err := k.postOne(ctx, "update", req)
+	id := notReadyID(err, req)
+	if id == "" {
+		return out, err
+	}
+	if _, waitErr := k.WaitReady(ctx, id); waitErr != nil {
+		return nil, fmt.Errorf("%w; and waiting for it to be ready failed: %v", err, waitErr)
+	}
 	return k.postOne(ctx, "update", req)
+}
+
+// notReadyID returns the id of the request when err is the API's refusal to
+// change an object that is not ready, and "" otherwise.
+func notReadyID(err error, req any) string {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != 400 || !strings.Contains(apiErr.Body, "Not ready") {
+		return ""
+	}
+	raw, _ := json.Marshal(req)
+	var fields struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(raw, &fields)
+	return fields.ID
 }
 
 // Delete queues the object for deletion. Use WaitDeleted to wait for it to go.

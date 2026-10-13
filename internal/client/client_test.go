@@ -167,6 +167,41 @@ func TestUpdateIsPartial(t *testing.T) {
 	}
 }
 
+func TestUpdateWaitsForAnObjectThatIsNotReady(t *testing.T) {
+	f, c, _ := newFake(t)
+	f.on("POST", "/mailuser/update/",
+		reply{status: 400, body: `[{"id":["Not ready."]}]`},
+		ok(`[{"id":"`+idA+`","state":"PENDING_UPDATE","ready":false,"name":"tfacc-box"}]`))
+	f.on("GET", "/mailuser/read/"+idA,
+		ok(`{"id":"`+idA+`","state":"PENDING_UPDATE","ready":false,"name":"tfacc-box"}`),
+		ok(`{"id":"`+idA+`","state":"READY","ready":true,"name":"tfacc-box"}`))
+
+	if _, err := c.MailUsers().Update(context.Background(), MailUserUpdate{ID: idA, Password: "tfacc-password"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count("POST", "/mailuser/update/"); n != 2 {
+		t.Errorf("%d updates sent, want 2: the refused one and one more after the wait", n)
+	}
+
+	// Refused again after the wait: the error is returned, and nothing is sent a third time.
+	f.on("POST", "/mailuser/update/", reply{status: 400, body: `[{"id":["Not ready."]}]`})
+	f.on("GET", "/mailuser/read/"+idA, ok(`{"id":"`+idA+`","state":"READY","ready":true,"name":"tfacc-box"}`))
+	if _, err := c.MailUsers().Update(context.Background(), MailUserUpdate{ID: idA, Password: "tfacc-password"}); err == nil {
+		t.Error("an update refused twice was reported as done")
+	}
+	if n := f.count("POST", "/mailuser/update/"); n != 4 {
+		t.Errorf("%d updates sent in all, want 4", n)
+	}
+	// Any other 400 is not waited on.
+	f.on("POST", "/mailuser/update/", reply{status: 400, body: `[{"password":["Too short."]}]`})
+	if _, err := c.MailUsers().Update(context.Background(), MailUserUpdate{ID: idA, Password: "x"}); err == nil {
+		t.Error("a validation error was swallowed")
+	}
+	if n := f.count("POST", "/mailuser/update/"); n != 5 {
+		t.Errorf("%d updates sent in all, want 5", n)
+	}
+}
+
 func TestSiteCreateSendsArraysNeverNull(t *testing.T) {
 	f, c, _ := newFake(t)
 	f.on("POST", "/site/create/", ok(`[{"id":"`+idA+`","name":"tfacc-site"}]`))
