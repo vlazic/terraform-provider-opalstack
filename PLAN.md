@@ -32,9 +32,9 @@ Written to be read with no other context. Facts about the API are in
   (one implementation for both engines, `resource_database.go`), `opalstack_mailuser`,
   `opalstack_address` and `opalstack_cert`.
 - `make sweep` deletes leftover test objects, and fails on a kind the token cannot list.
-- v0.1.0 and v0.1.1 were tagged and released on 2026-10-12 as private GitHub releases: 13 archives, the
-  checksum file and its GPG signature. `make snapshot` builds the same archives locally. Nothing
-  is published to a registry. `make docs` regenerates `docs/` from the schemas
+- v0.1.0 and v0.1.1 were private releases of 2026-10-12. v0.1.2 is the first public one: 13
+  archives, the checksum file and its GPG signature, under MPL-2.0, source `vlazic/opalstack` in
+  the OpenTofu and Terraform registries. `make snapshot` builds the same archives locally. `make docs` regenerates `docs/` from the schemas
   and `examples/`.
 
 ## Decisions that differ from the first design notes
@@ -103,10 +103,3 @@ Written to be read with no other context. Facts about the API are in
 1. The open items at the end of `API_FINDINGS.md`.
 2. Not planned: `osvar`, a settable shell user password, a mailbox's filter rules and
    autoresponder, quarantined mail, notices.
-
-## Before this repository is ever made public
-
-- `CLAUDE.md` and the scripts under `scripts/` name `pass` entries, and one of those paths contains
-  an email address.
-- Run `make leaks` over the whole history.
-- Decide the registry namespace. Publishing to the Terraform Registry is permanent.

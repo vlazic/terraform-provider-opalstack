@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2 (2026-10-13)
+
+The first public version, under the Mozilla Public License 2.0. No change to the provider itself.
+
 ## 0.1.1 (2026-10-12)
 
 - `opalstack_cert`: `intermediates` left out of the configuration is now kept as the API has it.
@@ -8,7 +12,7 @@
 
 ## 0.1.0 (2026-10-12)
 
-The first version. Private: it is not published to a registry.
+The first version. It was a private release.
 
 **Resources**
 

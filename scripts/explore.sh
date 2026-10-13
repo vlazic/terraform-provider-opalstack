@@ -17,7 +17,8 @@
 set -euo pipefail
 
 readonly API="https://my.opalstack.com/api/v1"
-readonly PASS_PATH="Opalstack/tokens/full-access"
+# Where the full-access token is in pass. OPALSTACK_PASS_PATH names another entry.
+readonly PASS_PATH="${OPALSTACK_PASS_PATH:-Opalstack/tokens/full-access}"
 readonly ZERO_UUID="00000000-0000-0000-0000-000000000000"
 readonly KINDS=(server ip osuser domain app site dnsrecord)
 

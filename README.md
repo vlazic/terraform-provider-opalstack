@@ -3,9 +3,21 @@
 A Terraform and OpenTofu provider for [Opalstack](https://www.opalstack.com) managed hosting, built
 on terraform-plugin-framework. Opalstack is unrelated to Opal (opal.dev).
 
-**Status: private, released on GitHub only (see [`CHANGELOG.md`](CHANGELOG.md)).** Twelve resources and six data sources exist, are documented in
+**Status: early, version 0.1 (see [`CHANGELOG.md`](CHANGELOG.md)).** It is a personal project, not
+an Opalstack product. Twelve resources and six data sources exist, are documented in
 [`docs/`](docs/index.md), and pass acceptance tests against a real account. [`PLAN.md`](PLAN.md)
 says what is decided and what comes next.
+
+```hcl
+terraform {
+  required_providers {
+    opalstack = {
+      source  = "vlazic/opalstack"
+      version = "~> 0.1"
+    }
+  }
+}
+```
 
 To bring an existing account under Terraform without changing it, set `read_only = true` on the
 provider and follow [the adoption guide](docs/guides/adopting-an-account.md).
@@ -70,3 +82,7 @@ provider "opalstack" {
   # request_timeout = "30s"
 }
 ```
+
+## License
+
+[Mozilla Public License 2.0](LICENSE).
