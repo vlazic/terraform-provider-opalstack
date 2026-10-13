@@ -19,6 +19,7 @@ type mailUserDataModel struct {
 	ID           types.String `tfsdk:"id"`
 	Name         types.String `tfsdk:"name"`
 	IMAPServerID types.String `tfsdk:"imap_server_id"`
+	mailFilterModel
 }
 
 func newMailUserDataSource() datasource.DataSource { return &mailUserDataSource{} }
@@ -34,6 +35,12 @@ func (d *mailUserDataSource) Schema(_ context.Context, _ datasource.SchemaReques
 			"id":             lookupAttribute("UUID of the mailbox."),
 			"name":           lookupAttribute("Login name of the mailbox."),
 			"imap_server_id": computedString("UUID of the IMAP server that holds the mailbox."),
+			"procmailrc": computedString("The mailbox's filter rules, in procmail's format, as the API stores them: " +
+				"without a trailing newline."),
+			"autoresponder_enable":  computedBool("Whether the mailbox answers mail by itself."),
+			"autoresponder_subject": computedString("Subject of the automatic answer."),
+			"autoresponder_message": computedString("Text of the automatic answer."),
+			"autoresponder_noreply": computedStringSet("Addresses the autoresponder never answers."),
 		},
 	}
 }
@@ -59,6 +66,8 @@ func (d *mailUserDataSource) Read(ctx context.Context, req datasource.ReadReques
 	m.ID = types.StringValue(box.ID)
 	m.Name = types.StringValue(box.Name)
 	m.IMAPServerID = types.StringValue(box.IMAPServer)
+	// The resource's model does the conversion, so the two cannot drift apart.
+	resp.Diagnostics.Append(m.set(ctx, box.MailFilter)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }
 

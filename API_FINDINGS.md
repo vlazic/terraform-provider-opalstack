@@ -275,6 +275,9 @@ The two engines have the same shape under different paths (spec; `TestFindingMar
   keeps its value: switching the autoresponder off keeps its subject, message and list, and a
   password change touches none of them. An empty string or an empty list clears a field.
 - **`procmailrc` comes back without its trailing newline**: `"# tfacc\n"` is stored as `"# tfacc"`.
+- **UNVERIFIED:** whether `autoresponder_message` loses white space around it as well: the probe
+  sent none. The resource accepts either answer for both texts, and the filter steps of
+  `TestAccMail` send a message that ends in a newline.
 - `/mailuser/update_public/` is the mailbox owner's own change, with the current password. The
   provider does not call it.
 - For the safety prefix an address is judged by its `source`, and by the names of the mailboxes

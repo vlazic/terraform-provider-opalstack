@@ -663,6 +663,32 @@ func TestSafetyPrefix(t *testing.T) {
 		}
 	})
 
+	t.Run("a global variable is refused, whatever its name", func(t *testing.T) {
+		f, c := setup(t)
+		c.cfg.SafetyOSUserID = idB
+		yes := true
+		_, err := c.OSVars().Create(context.Background(), OSVarCreate{Name: "tfacc-VAR", OSUsers: []string{idB}, Global: &yes})
+		if !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("create: err = %v, want ErrSafetyPrefix", err)
+		}
+		if n := f.count("", ""); n != 0 {
+			t.Errorf("%d requests were sent", n)
+		}
+
+		f.on("GET", "/osvar/read/"+idA, ok(`{"id":"`+idA+`","name":"tfacc-VAR"}`))
+		f.on("POST", "/osvar/create/", ok(`[{"id":"`+idA+`","name":"tfacc-VAR"}]`))
+		if _, err := c.OSVars().Update(context.Background(), OSVarUpdate{ID: idA, Global: &yes}); !errors.Is(err, ErrSafetyPrefix) {
+			t.Errorf("update: err = %v, want ErrSafetyPrefix", err)
+		}
+		no := false
+		if _, err := c.OSVars().Create(context.Background(), OSVarCreate{Name: "tfacc-VAR", OSUsers: []string{idB}, Global: &no}); err != nil {
+			t.Errorf("a variable of the sandbox user that is not global: %v", err)
+		}
+		if n := posts(f); n != 1 {
+			t.Errorf("%d POST requests were sent, want 1", n)
+		}
+	})
+
 	t.Run("a site is refused when a domain or a routed app lacks the prefix", func(t *testing.T) {
 		f, c := setup(t)
 		f.on("GET", "/site/read/"+idA, ok(`{"id":"`+idA+`","name":"tfacc-site"}`))

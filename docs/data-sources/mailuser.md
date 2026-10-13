@@ -28,4 +28,9 @@ data "opalstack_mailuser" "info" {
 
 ### Read-Only
 
+- `autoresponder_enable` (Boolean) Whether the mailbox answers mail by itself.
+- `autoresponder_message` (String) Text of the automatic answer.
+- `autoresponder_noreply` (Set of String) Addresses the autoresponder never answers.
+- `autoresponder_subject` (String) Subject of the automatic answer.
 - `imap_server_id` (String) UUID of the IMAP server that holds the mailbox.
+- `procmailrc` (String) The mailbox's filter rules, in procmail's format, as the API stores them: without a trailing newline.

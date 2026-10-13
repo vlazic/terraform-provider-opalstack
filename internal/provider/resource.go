@@ -135,6 +135,15 @@ func knownString(v types.String) *string {
 	return v.ValueStringPointer()
 }
 
+// knownStrings is the same for a set of strings, which an update sends whole.
+func knownStrings(ctx context.Context, set types.Set, diags *diag.Diagnostics) *[]string {
+	if set.IsNull() || set.IsUnknown() {
+		return nil
+	}
+	list := stringsOf(ctx, set, diags)
+	return &list
+}
+
 // changedString is for a reference an update can set or clear. It is sent only
 // when the plan differs from the state: sending an unchanged value back would
 // overwrite whatever the API attached in the meantime, a certificate for one.

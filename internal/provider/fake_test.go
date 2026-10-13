@@ -19,6 +19,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 
 	"github.com/vlazic/terraform-provider-opalstack/internal/client"
 )
@@ -35,6 +38,18 @@ type fakeAPI struct {
 	created int
 	writes  []string // "kind/verb", in order
 	bodies  []string // the request body of each write
+	// tune points a provider's client at this fake. fakeProvider sets it.
+	tune func(*client.Config)
+}
+
+// get returns a copy of an object as a read would report it once it is ready.
+func (f *fakeAPI) get(id string) obj {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	o := public(f.objects[id])
+	delete(o, "state")
+	delete(o, "ready")
+	return o
 }
 
 // defaults are the fields the API fills in on create.
@@ -48,6 +63,9 @@ var defaults = map[string]obj{
 	"mariadb":   {"charset": "utf8", "dbusers_readwrite": []any{}, "dbusers_readonly": []any{}},
 	"psqldb":    {"charset": "utf8", "dbusers_readwrite": []any{}, "dbusers_readonly": []any{}},
 	"domain":    {"delegated_dns_zone": false, "is_valid_hostname": true, "dkim_record": nil, "dkim_pubkey": nil, "dkim_privkey": "PRIVATE"},
+	"mailuser": {"procmailrc": "", "autoresponder_enable": false, "autoresponder_subject": "", "autoresponder_message": "",
+		"autoresponder_noreply": []any{}},
+	"osvar": {"content": "", "osusers": []any{}, "global": false},
 }
 
 // createOnly are the fields that only the answer to a create carries.
@@ -119,6 +137,25 @@ func (f *fakeAPI) lastBody(kindVerb string) string {
 	return ""
 }
 
+// sent checks the body of the most recent write of a kind and verb: the parts
+// it must hold, and the ones it must not.
+func (f *fakeAPI) sent(kindVerb string, has, lacks []string) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		body := f.lastBody(kindVerb)
+		for _, part := range has {
+			if !strings.Contains(body, part) {
+				return fmt.Errorf("%s lacks %s: %s", kindVerb, part, body)
+			}
+		}
+		for _, part := range lacks {
+			if strings.Contains(body, part) {
+				return fmt.Errorf("%s must not send %s: %s", kindVerb, part, body)
+			}
+		}
+		return nil
+	}
+}
+
 // fill adds what the API derives from a write: an app's server and shell user
 // name, and a setting of its own next to the ones the caller sent.
 func (f *fakeAPI) fill(kind string, o obj, creating bool) {
@@ -136,6 +173,9 @@ func (f *fakeAPI) fill(kind string, o obj, creating bool) {
 	}
 	if kind == "cert" {
 		o["sha256_fingerprint"] = fmt.Sprintf("fake:%d", len(fmt.Sprint(o["cert"])))
+	}
+	if rules, ok := o["procmailrc"].(string); ok && kind == "mailuser" {
+		o["procmailrc"] = strings.TrimRight(rules, "\n") // stored without its trailing newline, as the API does
 	}
 	if kind != "app" {
 		return
@@ -268,12 +308,13 @@ func fakeProvider(t *testing.T) (*fakeAPI, map[string]func() (tfprotov6.Provider
 	f := &fakeAPI{objects: map[string]obj{}}
 	srv := httptest.NewTLSServer(f)
 	t.Cleanup(srv.Close)
+	f.tune = func(cfg *client.Config) {
+		cfg.HTTPClient = srv.Client()
+		cfg.RequestInterval, cfg.PollInterval = time.Nanosecond, time.Millisecond // a fake API needs no pacing
+	}
 
 	factories := map[string]func() (tfprotov6.ProviderServer, error){
-		"opalstack": providerserver.NewProtocol6WithError(provider.Provider(&opalstackProvider{version: "test", tune: func(cfg *client.Config) {
-			cfg.HTTPClient = srv.Client()
-			cfg.RequestInterval, cfg.PollInterval = time.Nanosecond, time.Millisecond // a fake API needs no pacing
-		}})),
+		"opalstack": providerserver.NewProtocol6WithError(provider.Provider(&opalstackProvider{version: "test", tune: f.tune})),
 	}
 	block := fmt.Sprintf(`
 provider "opalstack" {
@@ -282,4 +323,9 @@ provider "opalstack" {
 }
 `, srv.URL+"/api/v1")
 	return f, factories, block
+}
+
+// expectEmptyPlan is for a step that must plan nothing at all.
+func expectEmptyPlan() resource.ConfigPlanChecks {
+	return resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}}
 }

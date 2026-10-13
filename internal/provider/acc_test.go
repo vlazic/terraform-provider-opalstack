@@ -564,6 +564,68 @@ resource "%[8]s" "d" {
 	})
 }
 
+// TestAccOSVar gives its variable to the sandbox shell user and to nobody
+// else. It never makes a global one: the safety prefix would refuse it.
+func TestAccOSVar(t *testing.T) {
+	accEnv(t, tokenEnvVar)
+	provider, osuserID := accSandboxProvider(t)
+	first, second := accName(), accName()
+	const addr = "opalstack_osvar.v"
+	config := func(name, extra string) string {
+		return provider + fmt.Sprintf(`
+resource "opalstack_osvar" "v" {
+  name = %q
+  %s
+}
+`, name, extra)
+	}
+	given := fmt.Sprintf("osuser_ids = [%q]", osuserID)
+	expect := func(action plancheck.ResourceActionType) resource.ConfigPlanChecks { return accExpect(addr, action) }
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories,
+		CheckDestroy: accNoneLeft(t, "environment variable", func(c *client.Client) client.ReadKind[client.OSVar] { return c.OSVars().ReadKind },
+			func(v client.OSVar) string { return v.Name }),
+		Steps: []resource.TestStep{
+			{
+				Config: config(first, `content = "one"`+"\n  "+given),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "name", first),
+					resource.TestCheckResourceAttr(addr, "content", "one"),
+					resource.TestCheckResourceAttr(addr, "global", "false"),
+					resource.TestCheckTypeSetElemAttr(addr, "osuser_ids.*", osuserID),
+				),
+			},
+			{ResourceName: addr, ImportState: true, ImportStateVerify: true},
+			{ResourceName: addr, ImportState: true, ImportStateVerify: true, ImportStateId: first},
+			{ // the content in place
+				Config:           config(first, `content = "two words"`+"\n  "+given),
+				ConfigPlanChecks: expect(plancheck.ResourceActionUpdate),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "content", "two words"),
+					resource.TestCheckResourceAttr(addr, "osuser_ids.#", "1"),
+				),
+			},
+			{ // taken from the shell user: it belongs to nobody, and keeps its content
+				Config:           config(first, `content = "two words"`+"\n  osuser_ids = []"),
+				ConfigPlanChecks: expect(plancheck.ResourceActionUpdate),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "content", "two words"),
+					resource.TestCheckResourceAttr(addr, "osuser_ids.#", "0"),
+				),
+			},
+			{ // a new name replaces the variable; with no content it is empty
+				Config:           config(second, given),
+				ConfigPlanChecks: expect(plancheck.ResourceActionDestroyBeforeCreate),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "name", second),
+					resource.TestCheckResourceAttr(addr, "content", ""),
+				),
+			},
+		},
+	})
+}
+
 func TestAccMail(t *testing.T) {
 	if os.Getenv(resource.EnvTfAcc) == "" {
 		t.Skip("an acceptance test: set TF_ACC=1")
@@ -593,6 +655,18 @@ resource "opalstack_address" "a" {
 	delivered := "mailuser_ids = [opalstack_mailuser.m.id]"
 	password := `password = "` + accPassword() + `"`
 	noPassword := []string{"default_password", "password"}
+	forwarded := `forwards = ["tfacc-forward@example.com"]` + "\n  mailuser_ids = []"
+	const filter = `
+  procmailrc = <<-EOT
+    # tfacc
+  EOT
+  autoresponder_enable  = true
+  autoresponder_subject = "tfacc subject"
+  autoresponder_message = <<-EOT
+    tfacc message
+  EOT
+  autoresponder_noreply = ["tfacc-noreply@example.com"]
+`
 
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: accFactories,
@@ -618,7 +692,7 @@ resource "opalstack_address" "a" {
 			{ResourceName: address, ImportState: true, ImportStateVerify: true},
 			{ResourceName: address, ImportState: true, ImportStateVerify: true, ImportStateId: local + "@" + domain},
 			{
-				Config: config(password, local, `forwards = ["tfacc-forward@example.com"]`+"\n  mailuser_ids = []"),
+				Config: config(password, local, forwarded),
 				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
 					plancheck.ExpectResourceAction(box, plancheck.ResourceActionUpdate),
 					plancheck.ExpectResourceAction(address, plancheck.ResourceActionUpdate),
@@ -628,7 +702,50 @@ resource "opalstack_address" "a" {
 					resource.TestCheckResourceAttr(address, "forwards.#", "1"),
 				),
 			},
-			{Config: config(password, local, `forwards = ["tfacc-forward@example.com"]`+"\n  mailuser_ids = []"), ConfigPlanChecks: accExpect(address, plancheck.ResourceActionNoop)},
+			{Config: config(password, local, forwarded), ConfigPlanChecks: accExpect(address, plancheck.ResourceActionNoop)},
+			{ // filter rules and autoresponder on the existing mailbox; the heredoc ends in a newline the API drops
+				Config:           config(password+filter, local, forwarded),
+				ConfigPlanChecks: accExpect(box, plancheck.ResourceActionUpdate),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(box, "procmailrc", "# tfacc\n"),
+					resource.TestCheckResourceAttr(box, "autoresponder_enable", "true"),
+					resource.TestCheckResourceAttr(box, "autoresponder_subject", "tfacc subject"),
+					resource.TestCheckResourceAttr(box, "autoresponder_message", "tfacc message\n"),
+					resource.TestCheckTypeSetElemAttr(box, "autoresponder_noreply.*", "tfacc-noreply@example.com"),
+				),
+			},
+			{ // one changed, two cleared, the autoresponder off; the rules are left out and stay
+				Config: config(password+`
+  autoresponder_enable  = false
+  autoresponder_subject = "tfacc gone"
+  autoresponder_message = ""
+  autoresponder_noreply = []`, local, forwarded),
+				ConfigPlanChecks: accExpect(box, plancheck.ResourceActionUpdate),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(box, "procmailrc", "# tfacc\n"),
+					resource.TestCheckResourceAttr(box, "autoresponder_enable", "false"),
+					resource.TestCheckResourceAttr(box, "autoresponder_subject", "tfacc gone"),
+					resource.TestCheckResourceAttr(box, "autoresponder_message", ""),
+					resource.TestCheckResourceAttr(box, "autoresponder_noreply.#", "0"),
+				),
+			},
+			{ // all five left out again: no change, and the mailbox keeps what it has
+				Config:           config(password, local, forwarded),
+				ConfigPlanChecks: accExpect(box, plancheck.ResourceActionNoop),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(box, "autoresponder_subject", "tfacc gone"),
+					func(s *terraform.State) error {
+						got, err := accClient(t).MailUsers().Read(context.Background(), s.RootModule().Resources[box].Primary.ID)
+						if err != nil {
+							return err
+						}
+						if got.Procmailrc != "# tfacc" || got.AutoresponderSubject != "tfacc gone" {
+							return fmt.Errorf("the mailbox lost a field the configuration stopped naming")
+						}
+						return nil
+					},
+				),
+			},
 			{
 				Config:           config(password, other, delivered),
 				ConfigPlanChecks: accExpect(address, plancheck.ResourceActionDestroyBeforeCreate),

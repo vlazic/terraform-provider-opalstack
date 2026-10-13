@@ -188,7 +188,7 @@ func (p *opalstackProvider) Resources(context.Context) []func() resource.Resourc
 	return []func() resource.Resource{
 		newDomainResource, newDNSRecordResource, newOSUserResource, newAppResource, newSiteResource,
 		newMariaUserResource, newMariaDBResource, newPsqlUserResource, newPsqlDBResource,
-		newMailUserResource, newAddressResource, newCertResource,
+		newMailUserResource, newAddressResource, newCertResource, newOSVarResource,
 	}
 }
 

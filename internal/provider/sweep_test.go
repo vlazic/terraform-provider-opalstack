@@ -59,6 +59,8 @@ func TestSweep(t *testing.T) {
 		}
 		return d.Name, d.ID
 	})
+	// A variable before the shell user it is given to.
+	sweep(ctx, t, "environment variable", c.OSVars(), func(v client.OSVar) (string, string) { return v.Name, v.ID })
 	sweep(ctx, t, "shell user", c.OSUsers(), func(u client.OSUser) (string, string) { return u.Name, u.ID })
 }
 

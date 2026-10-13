@@ -44,15 +44,20 @@ test object unless rule 2 says so.
 
 - Resources: `opalstack_osuser`, `opalstack_domain`, `opalstack_app`, `opalstack_site`,
   `opalstack_dnsrecord`, `opalstack_cert`, `opalstack_mariauser`, `opalstack_mariadb`,
-  `opalstack_psqluser`, `opalstack_psqldb`, `opalstack_mailuser`, `opalstack_address`. Data
-  sources: `opalstack_server`, `opalstack_ip`, `opalstack_osuser`, `opalstack_domain`,
-  `opalstack_app`, `opalstack_site`.
+  `opalstack_psqluser`, `opalstack_psqldb`, `opalstack_mailuser`, `opalstack_address`,
+  `opalstack_osvar`. Data sources: `opalstack_server`, `opalstack_ip`, `opalstack_osuser`,
+  `opalstack_domain`, `opalstack_app`, `opalstack_site`, `opalstack_dnsrecord`, `opalstack_cert`,
+  `opalstack_mariauser`, `opalstack_mariadb`, `opalstack_psqluser`, `opalstack_psqldb`,
+  `opalstack_mailuser`, `opalstack_address`.
   Attributes that reference another object end in `_id`.
 - `internal/client` imports nothing from Terraform. It sends one-element JSON arrays for create and
   update, `[{"id": ...}]` for delete, and waits for `ready == true`.
 - Read on not-found removes the resource from state. Read on 403 is an error and never removes it:
   an ACL denial is not a deletion.
 - Immutable fields use `RequiresReplace`; stable computed fields use `UseStateForUnknown`.
+- An attribute added to an existing resource is Optional and Computed with `UseStateForUnknown`,
+  and an update sends it only when the plan changes it: a configuration that does not name it must
+  plan nothing and send nothing. `TestMailUserUpgradeFrom012` is the pattern for testing that.
 - Secrets are `Sensitive: true`.
 - Test names are `tfacc-` plus six random lowercase alphanumerics. Sweepers match the prefix
   strictly and skip anything ambiguous.

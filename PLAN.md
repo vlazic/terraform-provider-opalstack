@@ -37,6 +37,25 @@ Written to be read with no other context. Facts about the API are in
   the OpenTofu and Terraform registries. `make snapshot` builds the same archives locally. `make docs` regenerates `docs/` from the schemas
   and `examples/`.
 
+## Done (2026-10-13), for version 0.2, not released
+
+- Eight more data sources: `opalstack_dnsrecord`, `opalstack_cert`, `opalstack_mariauser`,
+  `opalstack_mariadb`, `opalstack_psqluser`, `opalstack_psqldb`, `opalstack_mailuser` and
+  `opalstack_address`.
+- A thirteenth resource, `opalstack_osvar`, after `TestFindingOSVar`. It is imported by UUID or
+  by name; a name that several variables carry is refused. `global = true` is unverified against
+  the live API, because the safety prefix refuses it.
+- `opalstack_mailuser` manages `procmailrc` and the four `autoresponder_*` fields, after
+  `TestFindingMailFilter`. Each is Optional and Computed and is sent only when the plan changes
+  it, so a configuration that names none of them plans nothing: `TestMailUserUpgradeFrom012`
+  writes a state with the 0.1.2 schema and checks exactly that. The newline the API drops from
+  `procmailrc` is absorbed in two places: the model keeps the text as written when the API's
+  differs only in the white space around it, and a plan modifier plans the state when the
+  configuration differs from it only in that.
+- **All of this is tested offline only.** `TestAccOSVar` and the filter steps of `TestAccMail` are
+  written and have not run against the real account yet. `TestAccOSVar` needs the write switch
+  of osvar; the sweeper covers the kind.
+
 ## Decisions that differ from the first design notes
 
 - **Waiting fails fast only on a `_FAILED` state.** The spec's state enum has no failure value, but
@@ -101,5 +120,5 @@ Written to be read with no other context. Facts about the API are in
 ## Next
 
 1. The open items at the end of `API_FINDINGS.md`.
-2. Not planned: `osvar`, a settable shell user password, a mailbox's filter rules and
-   autoresponder, quarantined mail, notices.
+2. Run `TestAccOSVar` and `TestAccMail` against the real account, then release 0.2.0.
+3. Not planned: a settable shell user password, quarantined mail, notices.

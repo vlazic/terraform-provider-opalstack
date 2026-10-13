@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+The acceptance tests of what is new here have not run against a real account yet.
+
+- New resource `opalstack_osvar`: an environment variable of shell users. `global = true` has not
+  been verified against the live API.
+- `opalstack_mailuser`: `procmailrc`, `autoresponder_enable`, `autoresponder_subject`,
+  `autoresponder_message` and `autoresponder_noreply` manage a mailbox's filter rules and
+  autoresponder. Each one that the configuration leaves out is never sent and keeps what the API
+  has, so a configuration written for 0.1 plans no change after the upgrade. The data source
+  `opalstack_mailuser` reports the same five.
+- New data sources: `opalstack_dnsrecord`, `opalstack_cert`, `opalstack_mailuser`,
+  `opalstack_address`, `opalstack_mariadb`, `opalstack_mariauser`, `opalstack_psqldb`,
+  `opalstack_psqluser`.
+
 ## 0.1.2 (2026-10-13)
 
 The first public version, under the Mozilla Public License 2.0. No change to the provider itself.

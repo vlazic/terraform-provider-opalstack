@@ -4,14 +4,14 @@ page_title: "opalstack_mailuser Resource - opalstack"
 subcategory: ""
 description: |-
   A mailbox. Mail reaches it through an opalstack_address that names it. Deleting a mailbox deletes its mail, and the API silently takes it out of every address that delivered to it.
-  The mailbox's filter rules and autoresponder are not managed by this resource and are left as they are.
+  The filter rules and the autoresponder are managed only where the configuration names them: procmailrc and each autoresponder_* attribute that is left out is never sent, and the mailbox keeps what it has.
 ---
 
 # opalstack_mailuser (Resource)
 
 A mailbox. Mail reaches it through an `opalstack_address` that names it. Deleting a mailbox deletes its mail, and the API silently takes it out of every address that delivered to it.
 
-The mailbox's filter rules and autoresponder are not managed by this resource and are left as they are.
+The filter rules and the autoresponder are managed only where the configuration names them: `procmailrc` and each `autoresponder_*` attribute that is left out is never sent, and the mailbox keeps what it has.
 
 ## Example Usage
 
@@ -23,6 +23,23 @@ data "opalstack_server" "imap" {
 resource "opalstack_mailuser" "info" {
   name           = "example_info"
   imap_server_id = data.opalstack_server.imap.id
+}
+
+# Filter rules and an autoresponder are optional. Whatever is left out is not managed.
+resource "opalstack_mailuser" "sales" {
+  name           = "example_sales"
+  imap_server_id = data.opalstack_server.imap.id
+
+  procmailrc = <<-EOT
+    :0
+    * ^Subject:.*\[newsletter\]
+    newsletters/
+  EOT
+
+  autoresponder_enable  = true
+  autoresponder_subject = "Out of office"
+  autoresponder_message = "We are back on Monday."
+  autoresponder_noreply = ["noreply@example.com"]
 }
 ```
 
@@ -36,7 +53,12 @@ resource "opalstack_mailuser" "info" {
 
 ### Optional
 
+- `autoresponder_enable` (Boolean) Whether the mailbox answers mail by itself. Switching it off keeps the subject, the message and the list. Left out, it is not managed: a new mailbox gets the API's default and an existing one keeps what the API has.
+- `autoresponder_message` (String) Text of the automatic answer. White space around it is not shown as a change. Set it to `""` to clear it. Left out, it is not managed: a new mailbox gets the API's default and an existing one keeps what the API has.
+- `autoresponder_noreply` (Set of String) Addresses the autoresponder never answers. Set it to `[]` to empty the list. Left out, the list is empty on a new object and is left as it is on an existing one.
+- `autoresponder_subject` (String) Subject of the automatic answer. Set it to `""` to clear it. Left out, it is not managed: a new mailbox gets the API's default and an existing one keeps what the API has.
 - `password` (String, Sensitive) Password of the mailbox. Left out, the API chooses one and reports it in `default_password`. It can be changed in place. The API never returns it, so a password changed outside Terraform is not noticed.
+- `procmailrc` (String) The mailbox's filter rules, in procmail's format. The API stores the text without its trailing newline, which is not shown as a change. Set it to `""` to remove the rules. Left out, it is not managed: a new mailbox gets the API's default and an existing one keeps what the API has.
 - `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 
 ### Read-Only
