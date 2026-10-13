@@ -106,7 +106,13 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
   So the password sent on create is ignored, and the server's one is available exactly once.
 - `default_password` is also returned when no `password` is sent (`TestAccOSUser`, 2026-10-12).
   The provider sends none and exposes the value as a sensitive computed attribute.
-- **UNVERIFIED:** whether a password set through update takes effect. The resource does not offer it.
+- **A password set through the API works** (`TestFindingOSUserPassword`, 2026-10-13, by logging
+  in over SSH as a test shell user). A password set through update is accepted for login, and the
+  `default_password` of the create is refused from then on. A password sent on create is accepted
+  for login too, although the answer still carries a `default_password` that is another value:
+  that corrects the note of 2026-10-12 above, which took the differing value to mean the password
+  was ignored. Whether that `default_password` also works was not tried: one failed login was the
+  limit, so the address running the probe is not banned. The resource offers `password`.
 - The API has no way to manage SSH keys on a shell user (runbook).
 
 ### domain
@@ -164,7 +170,22 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
     tested. A string, even `"83"`, answers 400 `'83' is not of type 'integer'`.
   - `external_port_access: true` was accepted on an `APA` app, so the schema is not strictly per
     type. An update with `{}` changed nothing: `php_version` stayed.
-  - Still not known: the complete list of keys.
+- **One schema serves every app type** (`TestFindingAppJSONKeys`, 2026-10-13). An update naming
+  thirty candidate keys got the same answer from all nine types. Known to the schema: `php_version`,
+  `fpm_type`, `fpm_max_children`, `fpm_start_servers`, `fpm_min_spare_servers`,
+  `fpm_max_spare_servers`, `fpm_max_requests`, `app_exec`, `url_fopen`, `sym_link_path`,
+  `auto_site_url`, `add_https_security_headers`, `external_port_access`, `subroot`, `db_name`,
+  `db_user`, `db_host`, `app_name`. Refused as unknown: `app_email`, `app_user`, `db_type`,
+  `fpm_process_idle_timeout`, `max_execution_time`, `memory_limit`, `node_version`,
+  `post_max_size`, `proxy_pass`, `python_version`, `ruby_version`, `upload_max_filesize`. A key
+  that was not among the candidates may still exist.
+  - `sym_link_path` is checked before the schema: a type other than `SLS`, `SLP`, `SLN` answers
+    400 `sym_link_path is incompatible with this app type.` Those three need it on create and
+    store it with a trailing slash.
+  - `SLP` and `SLN` get the `php_version` default as well.
+  - **A nested value (a list holding an object) for a key answers HTTP 500** with an empty body,
+    for every type. The provider cannot send one: `json` values come from `jsonencode` of the
+    configuration, so this is reachable only through a configuration that nests.
 - Deleting an app removes its directory on the server (runbook).
 - `POST /app/installed/` and `/app/failed/` are callbacks for installer scripts. Not for Terraform.
 
@@ -491,8 +512,7 @@ settings per type, and `generate_le` on a domain that does not resolve.
 
 Still open:
 
-1. Whether a password set through `osuser/update/` takes effect. Checking it needs a login.
-2. The complete list of `json` keys per app type.
+1. Which `json` keys exist beyond the eighteen found, and which app type acts on which.
 3. `generate_le` for a domain that does resolve to the server: when `cert` appears, and whether a
    renewal replaces the certificate object.
 4. `delegated_dns_zone` set in place: refused for every name that has an ancestor domain in the

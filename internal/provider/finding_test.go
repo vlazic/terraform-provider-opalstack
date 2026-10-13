@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"net"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/vlazic/terraform-provider-opalstack/internal/client"
 )
@@ -805,5 +809,195 @@ func TestFindingMailFilter(t *testing.T) {
 	p.find("a password change with no filter field: %s", answer(err))
 	if settle(plain.ID, err) {
 		p.find("after the password change: %s", describe(plain.ID))
+	}
+}
+
+// Does a password set through osuser/update/ take effect? Answered by logging
+// in over SSH as a test shell user. Host keys are not checked: the probe sends
+// only a password it generated a moment ago, for a user it deletes afterwards.
+func TestFindingOSUserPassword(t *testing.T) {
+	p := newProbe(t)
+	sandbox, err := p.c.OSUsers().Read(p.ctx, p.osuser)
+	p.must(err)
+	servers, err := p.c.ListServers(p.ctx)
+	p.must(err)
+	host := ""
+	for _, s := range servers.Web {
+		if s.ID == sandbox.Server {
+			host = s.Hostname
+		}
+	}
+	if host == "" {
+		t.Fatal("the sandbox shell user's server is not among the web servers")
+	}
+	login := func(user, password string) string {
+		conn, err := ssh.Dial("tcp", host+":22", &ssh.ClientConfig{
+			User: user, Auth: []ssh.AuthMethod{ssh.Password(password)},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 30 * time.Second,
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "unable to authenticate") {
+				return "refused"
+			}
+			return "could not connect: " + strings.ReplaceAll(err.Error(), host, "<server>")
+		}
+		_ = conn.Close()
+		return "accepted"
+	}
+
+	users := p.c.OSUsers()
+	u, err := users.Create(p.ctx, client.OSUserCreate{Server: sandbox.Server, Name: accName()})
+	p.must(err)
+	later(p, users, u.ID)
+	first := u.DefaultPassword
+	_, err = users.WaitReady(p.ctx, u.ID)
+	p.must(err)
+	p.find("a new shell user, login with the password the API chose: %s", login(u.Name, first))
+
+	chosen := accPassword()
+	_, err = users.Update(p.ctx, client.OSUserUpdate{ID: u.ID, Password: chosen})
+	p.find("password set through update: %s", answer(err))
+	p.must(err)
+	_, err = users.WaitReady(p.ctx, u.ID)
+	p.must(err)
+	p.find("login with the password that was set: %s", login(u.Name, chosen))
+	// One failed attempt only: more could get this address banned from the server.
+	p.find("login with the password the API chose, after the change: %s", login(u.Name, first))
+
+	onCreate := accPassword()
+	w, err := users.Create(p.ctx, client.OSUserCreate{Server: sandbox.Server, Name: accName(), Password: onCreate})
+	p.find("a shell user created with a password of its own: %s", p.took(err))
+	if err == nil {
+		later(p, users, w.ID)
+		_, err = users.WaitReady(p.ctx, w.ID)
+		p.must(err)
+		p.find("login with the password given on create: %s", login(w.Name, onCreate))
+	}
+}
+
+// Which json keys does each app type know? One update per type names every
+// candidate with a word as its value. The refusal names the keys the type does
+// not have, and the keys that want another kind of value. The apps are thrown
+// away afterwards, so a request that is accepted does no harm.
+func TestFindingAppJSONKeys(t *testing.T) {
+	p := newProbe(t)
+	sandbox, err := p.c.OSUsers().Read(p.ctx, p.osuser)
+	p.must(err)
+	candidates := []string{
+		"php_version", "fpm_type", "fpm_max_children", "fpm_start_servers", "fpm_min_spare_servers",
+		"fpm_max_spare_servers", "fpm_max_requests", "fpm_process_idle_timeout", "app_exec", "url_fopen",
+		"sym_link_path", "auto_site_url", "add_https_security_headers", "external_port_access", "subroot",
+		"db_name", "db_user", "db_type", "db_host", "app_user", "app_email", "app_name", "proxy_pass",
+		"memory_limit", "upload_max_filesize", "post_max_size", "max_execution_time", "node_version",
+		"python_version", "ruby_version",
+	}
+	wrong := map[string]any{}
+	for _, key := range candidates {
+		// A plain word: a nested value made the API answer 500.
+		wrong[key] = "tfacc"
+	}
+	p.find("candidate keys sent: %s", strings.Join(candidates, " "))
+	for _, appType := range []string{"STA", "NPF", "APA", "CUS", "SLS", "SLP", "SLN", "SVN", "DAV"} {
+		create := client.AppCreate{Name: accName(), OSUser: p.osuser, Type: appType}
+		if strings.HasPrefix(appType, "SL") {
+			create.JSON = map[string]any{"sym_link_path": "/home/" + sandbox.Name + "/apps"}
+		}
+		a, err := p.c.Apps().Create(p.ctx, create)
+		if err != nil {
+			p.find("%s could not be created: %s", appType, answer(err))
+			continue
+		}
+		later(p, p.c.Apps(), a.ID)
+		ready, err := p.c.Apps().WaitReady(p.ctx, a.ID)
+		if err != nil {
+			p.find("%s created, then %s", appType, answer(err))
+			continue
+		}
+		// sym_link_path is checked before the schema is: refused outright for a type
+		// that has none, and wanted as a path by the three that do.
+		asked := maps.Clone(wrong)
+		delete(asked, "sym_link_path")
+		if path, has := ready.JSON["sym_link_path"]; has {
+			asked["sym_link_path"] = path
+		}
+		_, err = p.c.Apps().Update(p.ctx, client.AppUpdate{ID: a.ID, JSON: asked})
+		p.find("%s (json after create %s) answers every candidate with: %s", appType, settings(ready.JSON), answer(err))
+		if err == nil {
+			_, err = p.c.Apps().WaitReady(p.ctx, a.ID)
+			p.must(err)
+		}
+	}
+}
+
+// What does generate_le do for a domain that does resolve to the server?
+func TestFindingLetsEncrypt(t *testing.T) {
+	p := newProbe(t)
+	sandbox, err := p.c.OSUsers().Read(p.ctx, p.osuser)
+	p.must(err)
+	ips, err := p.c.IPs().List(p.ctx)
+	p.must(err)
+	address := ""
+	for _, ip := range ips {
+		if ip.Server == sandbox.Server && ip.Type == "4" && ip.Primary {
+			address = ip.IP
+		}
+	}
+	if address == "" {
+		t.Fatal("the sandbox server has no primary IPv4 address")
+	}
+	mask := func(s string) string { return strings.ReplaceAll(s, address, "<ip>") }
+
+	d := p.domain()
+	rec, err := p.c.DNSRecords().Create(p.ctx, client.DNSRecordCreate{Domain: d.ID, Type: "A", Content: address})
+	p.find("an A record for the test domain, pointing at the server: %s", mask(p.took(err)))
+	p.must(err)
+	later(p, p.c.DNSRecords(), rec.ID)
+	_, err = p.c.DNSRecords().WaitReady(p.ctx, rec.ID)
+	p.must(err)
+
+	resolved := "never within 5 minutes"
+	for start := time.Now(); time.Since(start) < 5*time.Minute; time.Sleep(15 * time.Second) {
+		if addrs, err := net.LookupHost(d.Name); err == nil && slices.Contains(addrs, address) {
+			resolved = "after " + time.Since(start).Round(time.Second).String()
+			break
+		}
+	}
+	p.find("the test domain resolves to the server from here: %s", resolved)
+
+	a, yes := p.app(p.osuser), true
+	s := p.site(client.SiteCreate{Domains: []string{d.ID}, Routes: []client.Route{{App: a.ID, URI: "/"}}, GenerateLE: &yes})
+	p.find("site created with generate_le: generate_le=%v cert=%v", s.GenerateLE, s.Cert != nil)
+
+	seen, certID := []string{}, ""
+	for start := time.Now(); time.Since(start) < 12*time.Minute && certID == ""; time.Sleep(20 * time.Second) {
+		now, err := p.c.Sites().Read(p.ctx, s.ID)
+		p.must(err)
+		if now.Cert != nil {
+			certID = *now.Cert
+		}
+		state := fmt.Sprintf("%s generate_le=%v cert=%v", now.State, now.GenerateLE, now.Cert != nil)
+		if len(seen) == 0 || !strings.HasPrefix(seen[len(seen)-1], state) {
+			seen = append(seen, fmt.Sprintf("%s after %s", state, time.Since(start).Round(time.Second)))
+		}
+	}
+	p.find("the site over up to 12 minutes: %s", strings.Join(seen, " -> "))
+	if certID == "" {
+		return
+	}
+	later(p, p.c.Certs(), certID)
+	c, err := p.c.Certs().Read(p.ctx, certID)
+	p.must(err)
+	p.find("the certificate the site got: name=%q expires=%s has_intermediates=%v name_has_prefix=%v",
+		c.Name, c.ExpDate, c.Intermediates != nil && *c.Intermediates != "", strings.HasPrefix(c.Name, accPrefix))
+
+	no := false
+	_, err = p.c.Sites().Update(p.ctx, client.SiteUpdate{ID: s.ID, GenerateLE: &no})
+	p.find("generate_le turned off again: %s", answer(err))
+	if err == nil {
+		now, err := p.c.Sites().WaitReady(p.ctx, s.ID)
+		p.must(err)
+		_, readErr := p.c.Certs().Read(p.ctx, certID)
+		p.find("after turning it off: generate_le=%v the site still names a cert=%v, the certificate object: %s",
+			now.GenerateLE, now.Cert != nil, answer(readErr))
 	}
 }

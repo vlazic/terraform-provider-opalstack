@@ -24,6 +24,7 @@ type osuserModel struct {
 	ID              types.String   `tfsdk:"id"`
 	Name            types.String   `tfsdk:"name"`
 	ServerID        types.String   `tfsdk:"server_id"`
+	Password        types.String   `tfsdk:"password"`
 	DefaultPassword types.String   `tfsdk:"default_password"`
 	Timeouts        timeouts.Value `tfsdk:"timeouts"`
 }
@@ -36,10 +37,10 @@ func (r *osuserResource) Metadata(_ context.Context, req resource.MetadataReques
 
 func (r *osuserResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "A shell user. Apps belong to one and run as it. Nothing about a shell user can be changed " +
-			"in place, and deleting one deletes its home directory **and every app that belongs to it**.\n\n" +
-			"The API chooses the password and reports it once, in `default_password`. This resource does not set a " +
-			"password of your own, and the API has no way to manage SSH keys.",
+		MarkdownDescription: "A shell user. Apps belong to one and run as it. Only its password can be changed in " +
+			"place, and deleting one deletes its home directory **and every app that belongs to it**.\n\n" +
+			"Without a `password` the API chooses one and reports it once, in `default_password`. The API has " +
+			"no way to manage SSH keys.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "UUID of the shell user.",
@@ -56,15 +57,22 @@ func (r *osuserResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 				Required:            true,
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
+			"password": schema.StringAttribute{
+				MarkdownDescription: "Password of the shell user, for SSH and SFTP. Left out, the API chooses one and " +
+					"reports it in `default_password`. It can be changed in place. The API never returns it, so a " +
+					"password changed outside Terraform is not noticed, and taking the attribute out of the " +
+					"configuration changes nothing.",
+				Optional:  true,
+				Sensitive: true,
+			},
 			"default_password": schema.StringAttribute{
 				MarkdownDescription: "The password the API chose when it created the shell user. The API reports it only " +
-					"then, so it is null for a shell user that was imported.",
+					"then, so it is null for a shell user that was imported. It stops working once `password` is set.",
 				Computed:      true,
 				Sensitive:     true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			// Nothing updates in place, so there is no update timeout.
-			"timeouts": timeouts.Attributes(ctx, timeouts.Opts{Create: true, Delete: true}),
+			"timeouts": timeouts.Attributes(ctx, timeouts.Opts{Create: true, Update: true, Delete: true}),
 		},
 	}
 }
@@ -86,7 +94,9 @@ func (r *osuserResource) Create(ctx context.Context, req resource.CreateRequest,
 	}
 
 	users := r.client.OSUsers()
-	created, err := users.Create(ctx, client.OSUserCreate{Server: m.ServerID.ValueString(), Name: m.Name.ValueString()})
+	created, err := users.Create(ctx, client.OSUserCreate{
+		Server: m.ServerID.ValueString(), Name: m.Name.ValueString(), Password: m.Password.ValueString(),
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot create the shell user", err.Error())
 		return
@@ -120,11 +130,29 @@ func (r *osuserResource) Read(ctx context.Context, req resource.ReadRequest, res
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }
 
-// Update is reached only when the timeouts block changes: every other
-// attribute replaces the shell user.
+// Update changes the password, the one thing the API changes in place. A
+// password taken out of the configuration is not sent: the API has no way to
+// go back to one of its own choosing.
 func (r *osuserResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var m osuserModel
+	var m, state osuserModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	ctx, cancel := withTimeout(ctx, m.Timeouts.Update, &resp.Diagnostics)
+	defer cancel()
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if password := m.Password.ValueString(); password != "" && !m.Password.Equal(state.Password) {
+		users := r.client.OSUsers()
+		if _, err := users.Update(ctx, client.OSUserUpdate{ID: m.ID.ValueString(), Password: password}); err != nil {
+			resp.Diagnostics.AddError("Cannot change the shell user's password", err.Error())
+			return
+		}
+		if _, err := users.WaitReady(ctx, m.ID.ValueString()); err != nil {
+			resp.Diagnostics.AddError("The shell user did not become ready", err.Error())
+			return
+		}
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }
 

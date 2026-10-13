@@ -90,8 +90,8 @@ Written to be read with no other context. Facts about the API are in
   state, and is never read from the API although every read returns it.
 - **An address is judged by its `source` for the safety prefix**, through a per-kind name field on
   `ReadKind`, and by the mailboxes it delivers to.
-- **`opalstack_osuser` sets no password.** The API chooses one and reports it once, as
-  `default_password`.
+- **`opalstack_osuser` takes an optional `password`** since 0.2: a login over SSH showed that the
+  API honours one on create and on update. Without one the API's `default_password` stands.
 - **The framework's pointer getters turn an unknown value into a zero.** Requests are built with
   `knownBool`, `knownInt64` and `knownString` from `internal/provider/resource.go` instead.
 
@@ -121,4 +121,4 @@ Written to be read with no other context. Facts about the API are in
 
 1. The open items at the end of `API_FINDINGS.md`.
 2. Run `TestAccOSVar` and `TestAccMail` against the real account, then release 0.2.0.
-3. Not planned: a settable shell user password, quarantined mail, notices.
+3. Not planned: quarantined mail, notices.

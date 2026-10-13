@@ -2,10 +2,9 @@
 
 ## 0.2.0 (unreleased)
 
-The acceptance tests of what is new here have not run against a real account yet.
-
 - New resource `opalstack_osvar`: an environment variable of shell users. `global = true` has not
   been verified against the live API.
+- `opalstack_osuser`: an optional `password`, changed in place. Verified by logging in over SSH.
 - `opalstack_mailuser`: `procmailrc`, `autoresponder_enable`, `autoresponder_subject`,
   `autoresponder_message` and `autoresponder_noreply` manage a mailbox's filter rules and
   autoresponder. Each one that the configuration leaves out is never sent and keeps what the API
@@ -14,6 +13,9 @@ The acceptance tests of what is new here have not run against a real account yet
 - New data sources: `opalstack_dnsrecord`, `opalstack_cert`, `opalstack_mailuser`,
   `opalstack_address`, `opalstack_mariadb`, `opalstack_mariauser`, `opalstack_psqldb`,
   `opalstack_psqluser`.
+- An update the API refuses because the object is still settling (400 `Not ready`) now waits for
+  the object and is sent once more. It happened to a mailbox whose address changed in the same
+  apply.
 
 ## 0.1.2 (2026-10-13)
 

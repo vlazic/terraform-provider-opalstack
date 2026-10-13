@@ -223,16 +223,18 @@ func TestAccOSUser(t *testing.T) {
 	first, second := accName(), accName()
 	const addr = "opalstack_osuser.u"
 	// The new user goes on the server the sandbox user lives on.
-	config := func(name string) string {
+	configWith := func(name, extra string) string {
 		return accProvider + fmt.Sprintf(`
 data "opalstack_osuser" "sandbox" { name = %q }
 resource "opalstack_osuser" "u" {
   name      = %q
   server_id = data.opalstack_osuser.sandbox.server_id
+  %s
 }
-`, sandbox, name)
+`, sandbox, name, extra)
 	}
-	noPassword := []string{"default_password"}
+	config := func(name string) string { return configWith(name, "") }
+	noPassword := []string{"default_password", "password"}
 
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: accFactories,
@@ -248,6 +250,10 @@ resource "opalstack_osuser" "u" {
 			},
 			{ResourceName: addr, ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: noPassword},
 			{ResourceName: addr, ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: noPassword, ImportStateId: first},
+			{ // a password of its own, set in place; TestFindingOSUserPassword is what logs in with one
+				Config:           configWith(first, `password = "`+accPassword()+`"`),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionUpdate),
+			},
 			{
 				Config:           config(second),
 				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
