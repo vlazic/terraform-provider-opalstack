@@ -541,9 +541,13 @@ token. Nothing was created.
 - `POST /token/create/` with the name `tfacc-probe-<hex>` answers **400** with a message on
   `name`. The dashboard refuses a `-` in a token name the same way ("Invalid name."), so the name
   was the likely cause; the create was not tried again.
-- So token permissions cannot be managed through the API with an API token, and a token resource
-  could create tokens it cannot limit. The provider has no token resource. Tokens are made in the
-  dashboard.
+- A second run (same day) settled it, again creating nothing. With the full-access token:
+  `POST /token/create/` with a valid name answers **400**
+  `{"errors": "Tokens can not be created within the API. Please log into the control panel."}`;
+  `POST /tokenacl/create/` answers **403**; `token/delete` and `token/update` of a key no token
+  has answer 404 `key: Not found.`, so those two are open to an API token.
+- So tokens are made in the dashboard only, and their permissions are set there only. The
+  provider has no token resource.
 
 ## UNVERIFIED
 
