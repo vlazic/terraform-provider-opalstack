@@ -531,6 +531,20 @@ So a token cannot be limited to test objects and still create them. Whatever run
 tests holds service-level write on each kind it tests, and the safety prefix in the client is the
 only thing between a test and a real object.
 
+### token and tokenacl (not managed)
+
+Probed on 2026-10-14 by the owner, with the account's full-access API token and the narrow test
+token. Nothing was created.
+
+- `GET /tokenacl/list/` answers **403** `{"detail": ...}` to both tokens. An API token, even the account's
+  full-access one, cannot read token permissions.
+- `POST /token/create/` with the name `tfacc-probe-<hex>` answers **400** with a message on
+  `name`. The dashboard refuses a `-` in a token name the same way ("Invalid name."), so the name
+  was the likely cause; the create was not tried again.
+- So token permissions cannot be managed through the API with an API token, and a token resource
+  could create tokens it cannot limit. The provider has no token resource. Tokens are made in the
+  dashboard.
+
 ## UNVERIFIED
 
 Settled on 2026-10-12 by the `TestFinding*` probes and recorded above: what a failed create looks
