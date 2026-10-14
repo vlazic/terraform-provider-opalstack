@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"math/rand/v2"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -235,6 +237,9 @@ resource "opalstack_osuser" "u" {
 	}
 	config := func(name string) string { return configWith(name, "") }
 	noPassword := []string{"default_password", "password"}
+	woFirst, woSecond := accPassword(), accPassword()
+	woPlan, woState := neverKept(addr, woFirst, woSecond)
+	key := testPGPKey(t, nil)
 
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: accFactories,
@@ -254,10 +259,26 @@ resource "opalstack_osuser" "u" {
 				Config:           configWith(first, `password = "`+accPassword()+`"`),
 				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionUpdate),
 			},
-			{
-				Config:           config(second),
+			{ // a write-only one instead, kept in neither the plan nor the state; a login proves it took
+				Config:            configWith(first, writeOnly(woFirst, 1)),
+				ConfigPlanChecks:  resource.ConfigPlanChecks{PreApply: append(woPlan.PreApply, plancheck.ExpectResourceAction(addr, plancheck.ResourceActionUpdate))},
+				ConfigStateChecks: woState,
+				Check:             accLogin(t, addr, func(*terraform.State) (string, error) { return woFirst, nil }),
+			},
+			{ // a new version sends the new one
+				Config:            configWith(first, writeOnly(woSecond, 2)),
+				ConfigPlanChecks:  resource.ConfigPlanChecks{PreApply: append(woPlan.PreApply, plancheck.ExpectResourceAction(addr, plancheck.ResourceActionUpdate))},
+				ConfigStateChecks: woState,
+				Check:             accLogin(t, addr, func(*terraform.State) (string, error) { return woSecond, nil }),
+			},
+			{ // created with a key of the run's own: the API's password is kept only encrypted, and works
+				Config:           configWith(second, fmt.Sprintf("pgp_key = %q", armored(t, key, false))),
 				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
-				Check:            resource.TestCheckResourceAttr(addr, "name", second),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "name", second),
+					accEncrypted(addr, key),
+					accLogin(t, addr, accDecrypted(addr, key)),
+				),
 			},
 		},
 	})
@@ -273,6 +294,55 @@ provider "opalstack" {
   safety_osuser_id = %q
 }
 `, accPrefix, osuserID), osuserID
+}
+
+// accLogin logs in over SSH, once, as the shell user at addr, with the
+// password the function gives. The failure masks the host and any address.
+func accLogin(t *testing.T, addr string, password func(*terraform.State) (string, error)) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		user := s.RootModule().Resources[addr].Primary.Attributes
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		host, err := webHost(ctx, accClient(t), user["server_id"])
+		if err != nil {
+			return err
+		}
+		secret, err := password(s)
+		if err != nil {
+			return err
+		}
+		if got := sshLogin(host, user["name"], secret); got != "accepted" {
+			return fmt.Errorf("SSH login as %s: %s", user["name"], got)
+		}
+		return nil
+	}
+}
+
+// accDecrypted is the password the API chose for the object at addr, decrypted
+// with the run's key.
+func accDecrypted(addr string, key *openpgp.Entity) func(*terraform.State) (string, error) {
+	return func(s *terraform.State) (string, error) {
+		return pgpDecrypt(key, s.RootModule().Resources[addr].Primary.Attributes["encrypted_default_password"])
+	}
+}
+
+// accEncrypted checks that the object at addr keeps the password the API chose
+// only encrypted, to the run's key.
+func accEncrypted(addr string, key *openpgp.Entity) resource.TestCheckFunc {
+	return resource.ComposeAggregateTestCheckFunc(
+		resource.TestCheckNoResourceAttr(addr, "default_password"),
+		resource.TestCheckResourceAttr(addr, "key_fingerprint", pgpFingerprint(key)),
+		func(s *terraform.State) error {
+			password, err := accDecrypted(addr, key)(s)
+			if err != nil {
+				return fmt.Errorf("encrypted_default_password does not decrypt: %w", err)
+			}
+			if password == "" {
+				return errors.New("encrypted_default_password decrypts to nothing")
+			}
+			return nil
+		},
+	)
 }
 
 // accLogApp records what the API holds for an app's settings, which the spec
@@ -495,10 +565,10 @@ func TestAccPsql(t *testing.T) {
 func accDatabases(t *testing.T, engine dbEngine, charset string) {
 	sandbox := accEnv(t, "OPALSTACK_TEST_OSUSER")
 	accEnv(t, tokenEnvVar)
-	userName, readerName, dbName, secondDB := accName(), accName(), accName(), accName()
+	userName, readerName, dbName, secondDB, pgpUser := accName(), accName(), accName(), accName(), accName()
 	userType, dbType := "opalstack"+engine.userType, "opalstack"+engine.dbType
 	user, db := userType+".u", dbType+".d"
-	config := func(userExtra, db, dbExtra string) string {
+	configNamed := func(userName, userExtra, db, dbExtra string) string {
 		return accProvider + fmt.Sprintf(`
 data "opalstack_osuser" "sandbox" { name = %[2]q }
 resource "%[1]s" "u" {
@@ -517,9 +587,14 @@ resource "%[8]s" "d" {
 }
 `, userType, sandbox, userName, userExtra, readerName, db, dbExtra, dbType)
 	}
+	config := func(userExtra, db, dbExtra string) string { return configNamed(userName, userExtra, db, dbExtra) }
 	access := "user_ids = [" + userType + ".u.id]\n  readonly_user_ids = [" + userType + ".reader.id]"
 	password := `password = "` + accPassword() + `"`
 	noPassword := []string{"default_password", "password"}
+	woFirst, woSecond := accPassword(), accPassword()
+	woPlan, woState := neverKept(user, woFirst, woSecond)
+	noAccess := "user_ids = []\n  readonly_user_ids = []"
+	key := testPGPKey(t, nil)
 
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: accFactories,
@@ -557,14 +632,29 @@ resource "%[8]s" "d" {
 			},
 			{Config: config(password+"\n  external = true", dbName, access), ConfigPlanChecks: accExpect(db, plancheck.ResourceActionNoop)},
 			{
-				Config:           config(password+"\n  external = true", dbName, "user_ids = []\n  readonly_user_ids = []"),
+				Config:           config(password+"\n  external = true", dbName, noAccess),
 				ConfigPlanChecks: accExpect(db, plancheck.ResourceActionUpdate),
 				Check:            resource.TestCheckResourceAttr(db, "user_ids.#", "0"),
 			},
+			{ // a write-only password instead, kept in neither the plan nor the state
+				Config:            config(writeOnly(woFirst, 1)+"external = true", dbName, noAccess),
+				ConfigPlanChecks:  resource.ConfigPlanChecks{PreApply: append(woPlan.PreApply, plancheck.ExpectResourceAction(user, plancheck.ResourceActionUpdate))},
+				ConfigStateChecks: woState,
+			},
+			{ // a new version sends the new one
+				Config:            config(writeOnly(woSecond, 2)+"external = true", dbName, noAccess),
+				ConfigPlanChecks:  resource.ConfigPlanChecks{PreApply: append(woPlan.PreApply, plancheck.ExpectResourceAction(user, plancheck.ResourceActionUpdate))},
+				ConfigStateChecks: woState,
+			},
 			{
-				Config:           config(password+"\n  external = true", secondDB, `charset = "`+charset+`"`),
+				Config:           config(writeOnly(woSecond, 2)+"external = true", secondDB, `charset = "`+charset+`"`),
 				ConfigPlanChecks: accExpect(db, plancheck.ResourceActionDestroyBeforeCreate),
 				Check:            resource.TestCheckResourceAttr(db, "charset", charset),
+			},
+			{ // a user created with a key of the run's own keeps the API's password only encrypted
+				Config:           configNamed(pgpUser, fmt.Sprintf("pgp_key = %q", armored(t, key, false)), secondDB, `charset = "`+charset+`"`),
+				ConfigPlanChecks: accExpect(user, plancheck.ResourceActionDestroyBeforeCreate),
+				Check:            accEncrypted(user, key),
 			},
 		},
 	})
@@ -641,9 +731,9 @@ func TestAccMail(t *testing.T) {
 	if err != nil || len(servers.IMAP) == 0 {
 		t.Fatalf("no IMAP server to put a test mailbox on: %v", err)
 	}
-	domain, boxName, local, other := accName()+"."+base, accName(), accName(), accName()
+	domain, boxName, local, other, pgpBox := accName()+"."+base, accName(), accName(), accName(), accName()
 	const box, address = "opalstack_mailuser.m", "opalstack_address.a"
-	config := func(boxExtra, local, addressExtra string) string {
+	configNamed := func(boxName, boxExtra, local, addressExtra string) string {
 		return accProvider + fmt.Sprintf(`
 data "opalstack_server" "imap" { hostname = %[1]q }
 resource "opalstack_domain" "d" { name = %[2]q }
@@ -658,7 +748,13 @@ resource "opalstack_address" "a" {
 }
 `, servers.IMAP[0].Hostname, domain, boxName, boxExtra, local, addressExtra)
 	}
+	config := func(boxExtra, local, addressExtra string) string {
+		return configNamed(boxName, boxExtra, local, addressExtra)
+	}
 	delivered := "mailuser_ids = [opalstack_mailuser.m.id]"
+	woFirst, woSecond := accPassword(), accPassword()
+	woPlan, woState := neverKept(box, woFirst, woSecond)
+	key := testPGPKey(t, nil)
 	password := `password = "` + accPassword() + `"`
 	noPassword := []string{"default_password", "password"}
 	forwarded := `forwards = ["tfacc-forward@example.com"]` + "\n  mailuser_ids = []"
@@ -752,9 +848,23 @@ resource "opalstack_address" "a" {
 					},
 				),
 			},
-			{
-				Config:           config(password, other, delivered),
-				ConfigPlanChecks: accExpect(address, plancheck.ResourceActionDestroyBeforeCreate),
+			{ // a write-only password instead, kept in neither the plan nor the state
+				Config:            config(writeOnly(woFirst, 1), local, forwarded),
+				ConfigPlanChecks:  resource.ConfigPlanChecks{PreApply: append(woPlan.PreApply, plancheck.ExpectResourceAction(box, plancheck.ResourceActionUpdate))},
+				ConfigStateChecks: woState,
+			},
+			{ // a new version sends the new one
+				Config:            config(writeOnly(woSecond, 2), local, forwarded),
+				ConfigPlanChecks:  resource.ConfigPlanChecks{PreApply: append(woPlan.PreApply, plancheck.ExpectResourceAction(box, plancheck.ResourceActionUpdate))},
+				ConfigStateChecks: woState,
+			},
+			{ // a mailbox created with a key of the run's own keeps the API's password only encrypted
+				Config: configNamed(pgpBox, fmt.Sprintf("pgp_key = %q", armored(t, key, false)), other, delivered),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction(box, plancheck.ResourceActionDestroyBeforeCreate),
+					plancheck.ExpectResourceAction(address, plancheck.ResourceActionDestroyBeforeCreate),
+				}},
+				Check: accEncrypted(box, key),
 			},
 		},
 	})

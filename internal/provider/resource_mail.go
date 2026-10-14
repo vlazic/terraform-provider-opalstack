@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"maps"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -27,13 +28,12 @@ var (
 type mailUserResource struct{ baseResource }
 
 type mailUserModel struct {
-	ID              types.String   `tfsdk:"id"`
-	Name            types.String   `tfsdk:"name"`
-	IMAPServerID    types.String   `tfsdk:"imap_server_id"`
-	Password        types.String   `tfsdk:"password"`
-	DefaultPassword types.String   `tfsdk:"default_password"`
-	Timeouts        timeouts.Value `tfsdk:"timeouts"`
+	ID           types.String   `tfsdk:"id"`
+	Name         types.String   `tfsdk:"name"`
+	IMAPServerID types.String   `tfsdk:"imap_server_id"`
+	Timeouts     timeouts.Value `tfsdk:"timeouts"`
 	mailFilterModel
+	passwordModel
 }
 
 // mailFilterModel is what a mailbox does with mail by itself. The resource and
@@ -68,7 +68,7 @@ func (r *mailUserResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			"delivered to it.\n\n" +
 			"The filter rules and the autoresponder are managed only where the configuration names them: " +
 			"`procmailrc` and each `autoresponder_*` attribute that is left out is never sent, and the mailbox " +
-			"keeps what it has.",
+			"keeps what it has.\n\n" + secretsNote,
 		Attributes: map[string]schema.Attribute{
 			"id":   schema.StringAttribute{MarkdownDescription: "UUID of the mailbox.", Computed: true, PlanModifiers: keep},
 			"name": schema.StringAttribute{MarkdownDescription: "Login name of the mailbox. Changing it replaces the mailbox.", Required: true, PlanModifiers: replace},
@@ -79,15 +79,16 @@ func (r *mailUserResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				PlanModifiers: replace,
 			},
 			"password": schema.StringAttribute{
-				MarkdownDescription: "Password of the mailbox. Left out, the API chooses one and reports it in " +
-					"`default_password`. It can be changed in place. The API never returns it, so a password " +
-					"changed outside Terraform is not noticed.",
+				MarkdownDescription: "Password of the mailbox, kept in the state; `password_wo` keeps it out. Left " +
+					"out, the API chooses one and reports it in `default_password`. It can be changed in place. The " +
+					"API never returns it, so a password changed outside Terraform is not noticed.",
 				Optional:  true,
 				Sensitive: true,
 			},
 			"default_password": schema.StringAttribute{
 				MarkdownDescription: "The password the API reported when it created the mailbox. The API reports it " +
-					"only then, so it is null for a mailbox that was imported.",
+					"only then, so it is null for a mailbox that was imported. Null as well with `pgp_key`, which " +
+					"keeps it encrypted in `encrypted_default_password` instead.",
 				Computed:      true,
 				Sensitive:     true,
 				PlanModifiers: keep,
@@ -125,9 +126,10 @@ func (r *mailUserResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			"timeouts":              timeouts.Attributes(ctx, timeouts.Opts{Create: true, Update: true, Delete: true}),
 		},
 	}
+	maps.Copy(resp.Schema.Attributes, passwordAttributes("mailbox"))
 }
 
-// set copies what a read returns. Neither password is part of that.
+// set copies what a read returns. No password is part of that.
 func (m *mailUserModel) set(ctx context.Context, u *client.MailUser) diag.Diagnostics {
 	m.ID = types.StringValue(u.ID)
 	m.Name = types.StringValue(u.Name)
@@ -197,6 +199,8 @@ func (r *mailUserResource) Create(ctx context.Context, req resource.CreateReques
 	var m mailUserModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
 	filter := m.change(ctx, mailFilterModel{}, &resp.Diagnostics)
+	password := m.toSend(ctx, req.Config, passwordModel{}, &resp.Diagnostics)
+	key := m.pgpKey(&resp.Diagnostics)
 	ctx, cancel := withTimeout(ctx, m.Timeouts.Create, &resp.Diagnostics)
 	defer cancel()
 	if resp.Diagnostics.HasError() {
@@ -205,7 +209,7 @@ func (r *mailUserResource) Create(ctx context.Context, req resource.CreateReques
 
 	boxes := r.client.MailUsers()
 	created, err := boxes.Create(ctx, client.MailUserCreate{
-		IMAPServer: m.IMAPServerID.ValueString(), Name: m.Name.ValueString(), Password: m.Password.ValueString(),
+		IMAPServer: m.IMAPServerID.ValueString(), Name: m.Name.ValueString(), Password: password,
 		MailFilterChange: filter,
 	})
 	if err != nil {
@@ -216,8 +220,11 @@ func (r *mailUserResource) Create(ctx context.Context, req resource.CreateReques
 	// and with the password, which no later read can supply.
 	planned := m.mailFilterModel
 	resp.Diagnostics.Append(m.set(ctx, created)...)
-	m.DefaultPassword = stringOrNull(created.DefaultPassword)
+	m.keepDefault(created.DefaultPassword, key, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	ready, err := boxes.WaitReady(ctx, created.ID)
 	if err != nil {
@@ -226,7 +233,7 @@ func (r *mailUserResource) Create(ctx context.Context, req resource.CreateReques
 	}
 	// As for a database user: whether the create honours a password is not
 	// established, so it is set again through an update.
-	if password := m.Password.ValueString(); password != "" {
+	if password != "" {
 		if _, err := boxes.Update(ctx, client.MailUserUpdate{ID: created.ID, Password: password}); err != nil {
 			resp.Diagnostics.AddError("Cannot set the password of the mailbox", err.Error())
 			return
@@ -261,11 +268,12 @@ func (r *mailUserResource) Update(ctx context.Context, req resource.UpdateReques
 	var m, state mailUserModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	update := client.MailUserUpdate{ID: m.ID.ValueString(), MailFilterChange: m.change(ctx, state.mailFilterModel, &resp.Diagnostics)}
 	// A password removed from the configuration is left as it is: the API has
 	// no way to unset one.
-	if !m.Password.Equal(state.Password) {
-		update.Password = m.Password.ValueString()
+	update := client.MailUserUpdate{
+		ID:               m.ID.ValueString(),
+		Password:         m.toSend(ctx, req.Config, state.passwordModel, &resp.Diagnostics),
+		MailFilterChange: m.change(ctx, state.mailFilterModel, &resp.Diagnostics),
 	}
 	ctx, cancel := withTimeout(ctx, m.Timeouts.Update, &resp.Diagnostics)
 	defer cancel()

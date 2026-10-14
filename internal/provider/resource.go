@@ -7,13 +7,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/vlazic/terraform-provider-opalstack/internal/client"
@@ -155,15 +161,6 @@ func changedString(plan, state types.String) client.Nullable[string] {
 	return client.FromPtr(plan.ValueStringPointer())
 }
 
-// stringOrNull is for a value the API reports only sometimes, such as the
-// password in the answer to a create.
-func stringOrNull(s string) types.String {
-	if s == "" {
-		return types.StringNull()
-	}
-	return types.StringValue(s)
-}
-
 // sameText is for a text the API may store without the white space around it:
 // `procmailrc` loses its trailing newline, which a heredoc always has. When the
 // configuration differs from the state only in that, the state is planned, so
@@ -224,4 +221,117 @@ func stringSet(ctx context.Context, values []string, diags *diag.Diagnostics) ty
 	set, d := types.SetValueFrom(ctx, types.StringType, values)
 	diags.Append(d...)
 	return set
+}
+
+// secretsNote ends the description of a resource with a password.
+const secretsNote = "`password_wo` keeps a password of your choosing out of the state, and `pgp_key` keeps the one " +
+	"the API chooses there only encrypted. The guide \"Managing secrets\" compares the options."
+
+// passwordModel is what a shell user, a database user and a mailbox share: a
+// password the configuration chooses, given in the state or write-only, and
+// the one the API chooses on create, in the clear or encrypted to a key.
+type passwordModel struct {
+	Password                 types.String `tfsdk:"password"`
+	PasswordWO               types.String `tfsdk:"password_wo"`
+	PasswordWOVersion        types.Int64  `tfsdk:"password_wo_version"`
+	DefaultPassword          types.String `tfsdk:"default_password"`
+	PGPKey                   types.String `tfsdk:"pgp_key"`
+	EncryptedDefaultPassword types.String `tfsdk:"encrypted_default_password"`
+	KeyFingerprint           types.String `tfsdk:"key_fingerprint"`
+}
+
+// passwordAttributes are the attributes of passwordModel that version 0.3
+// added, for an object called what. Each is null unless the configuration
+// names it, so a configuration written before plans nothing new.
+func passwordAttributes(what string) map[string]schema.Attribute {
+	keep := []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
+	return map[string]schema.Attribute{
+		"password_wo": schema.StringAttribute{
+			MarkdownDescription: "Password of the " + what + ", write-only: sent to the API and never kept in the plan " +
+				"or the state. It is sent on create, and afterwards only when `password_wo_version` changes. " +
+				"Needs Terraform or OpenTofu 1.11 or newer. Conflicts with `password`.",
+			Optional:  true,
+			Sensitive: true,
+			WriteOnly: true,
+			Validators: []validator.String{
+				stringvalidator.ConflictsWith(path.MatchRoot("password")),
+				stringvalidator.AlsoRequires(path.MatchRoot("password_wo_version")),
+			},
+		},
+		"password_wo_version": schema.Int64Attribute{
+			MarkdownDescription: "Any number, kept in the state. Change it to send `password_wo` again, which is how a " +
+				"write-only password is changed. Required with `password_wo`. Taking both out of the " +
+				"configuration changes nothing: the " + what + " keeps its password.",
+			Optional:   true,
+			Validators: []validator.Int64{int64validator.AlsoRequires(path.MatchRoot("password_wo"))},
+		},
+		"pgp_key": schema.StringAttribute{
+			MarkdownDescription: "A public OpenPGP key, ASCII-armored (`file(\"key.asc\")`) or base64 of the binary " +
+				"form. When set, the password the API chooses on create is kept only encrypted to this key, in " +
+				"`encrypted_default_password`, and `default_password` stays null. The key is used on create " +
+				"only: changing it later encrypts nothing again and replaces nothing.",
+			Optional:   true,
+			Validators: []validator.String{pgpKeyValidator{}},
+		},
+		"encrypted_default_password": schema.StringAttribute{
+			MarkdownDescription: "With `pgp_key`, the password the API chose on create, encrypted to that key: " +
+				"base64 of a binary OpenPGP message, which `base64 -d | gpg -d` decrypts. Null otherwise, and for " +
+				"a " + what + " that was imported.",
+			Computed:      true,
+			PlanModifiers: keep,
+		},
+		"key_fingerprint": schema.StringAttribute{
+			MarkdownDescription: "Fingerprint of the key `encrypted_default_password` is encrypted to, in upper-case " +
+				"hexadecimal, as `gpg --fingerprint` shows it without the spaces.",
+			Computed:      true,
+			PlanModifiers: keep,
+		},
+	}
+}
+
+// toSend is the password a write sends, or "": `password` when the plan
+// changes it, or `password_wo` from the configuration when the plan changes
+// `password_wo_version`. Write-only values are null in the plan, so only the
+// configuration has it. A create passes a null state, so whichever is set is sent.
+func (m *passwordModel) toSend(ctx context.Context, config tfsdk.Config, state passwordModel, diags *diag.Diagnostics) string {
+	if password := m.Password.ValueString(); password != "" && !m.Password.Equal(state.Password) {
+		return password
+	}
+	if m.PasswordWOVersion.Equal(state.PasswordWOVersion) {
+		return ""
+	}
+	var password types.String
+	diags.Append(config.GetAttribute(ctx, path.Root("password_wo"), &password)...)
+	return password.ValueString()
+}
+
+// pgpKey reads the pgp_key of a plan, nil when there is none. A create calls it
+// before anything is sent, so a key that expired since the plan creates nothing.
+func (m *passwordModel) pgpKey(diags *diag.Diagnostics) *openpgp.Entity {
+	if m.PGPKey.IsNull() || m.PGPKey.IsUnknown() {
+		return nil
+	}
+	key, err := pgpPublicKey(m.PGPKey.ValueString(), time.Now())
+	if err != nil {
+		diags.AddAttributeError(path.Root("pgp_key"), "Unusable pgp_key", "The pgp_key cannot be used: "+err.Error()+".")
+	}
+	return key
+}
+
+// keepDefault keeps the password the API reported on create: in the clear, or
+// encrypted to key when there is one.
+func (m *passwordModel) keepDefault(password string, key *openpgp.Entity, diags *diag.Diagnostics) {
+	m.DefaultPassword, m.EncryptedDefaultPassword, m.KeyFingerprint = types.StringNull(), types.StringNull(), types.StringNull()
+	switch {
+	case password == "":
+	case key == nil:
+		m.DefaultPassword = types.StringValue(password)
+	default:
+		encrypted, err := pgpEncrypt(key, password)
+		if err != nil {
+			diags.AddError("Cannot encrypt the password the API chose", err.Error())
+			return
+		}
+		m.EncryptedDefaultPassword, m.KeyFingerprint = types.StringValue(encrypted), types.StringValue(pgpFingerprint(key))
+	}
 }

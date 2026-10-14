@@ -856,38 +856,49 @@ func TestFindingMailFilter(t *testing.T) {
 	}
 }
 
+// webHost is the host name of a web server, found by its UUID.
+func webHost(ctx context.Context, c *client.Client, serverID string) (string, error) {
+	servers, err := c.ListServers(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, s := range servers.Web {
+		if s.ID == serverID {
+			return s.Hostname, nil
+		}
+	}
+	return "", errors.New("the server is not among the web servers")
+}
+
+// sshLogin makes one login attempt over SSH with a password and says how it
+// went: "accepted", "refused", or why it could not connect, with the host and
+// any address masked. Host keys are not checked: a test sends only a password
+// it generated a moment ago, for a user it deletes afterwards. Each password
+// is tried once: failed attempts could get the address banned from the server.
+func sshLogin(host, user, password string) string {
+	conn, err := ssh.Dial("tcp", host+":22", &ssh.ClientConfig{
+		User: user, Auth: []ssh.AuthMethod{ssh.Password(password)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "unable to authenticate") {
+			return "refused"
+		}
+		return "could not connect: " + withoutAddress(err.Error(), host)
+	}
+	_ = conn.Close()
+	return "accepted"
+}
+
 // Does a password set through osuser/update/ take effect? Answered by logging
-// in over SSH as a test shell user. Host keys are not checked: the probe sends
-// only a password it generated a moment ago, for a user it deletes afterwards.
+// in over SSH as a test shell user.
 func TestFindingOSUserPassword(t *testing.T) {
 	p := newProbe(t)
 	sandbox, err := p.c.OSUsers().Read(p.ctx, p.osuser)
 	p.must(err)
-	servers, err := p.c.ListServers(p.ctx)
+	host, err := webHost(p.ctx, p.c, sandbox.Server)
 	p.must(err)
-	host := ""
-	for _, s := range servers.Web {
-		if s.ID == sandbox.Server {
-			host = s.Hostname
-		}
-	}
-	if host == "" {
-		t.Fatal("the sandbox shell user's server is not among the web servers")
-	}
-	login := func(user, password string) string {
-		conn, err := ssh.Dial("tcp", host+":22", &ssh.ClientConfig{
-			User: user, Auth: []ssh.AuthMethod{ssh.Password(password)},
-			HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 30 * time.Second,
-		})
-		if err != nil {
-			if strings.Contains(err.Error(), "unable to authenticate") {
-				return "refused"
-			}
-			return "could not connect: " + withoutAddress(err.Error(), host)
-		}
-		_ = conn.Close()
-		return "accepted"
-	}
+	login := func(user, password string) string { return sshLogin(host, user, password) }
 
 	users := p.c.OSUsers()
 	u, err := users.Create(p.ctx, client.OSUserCreate{Server: sandbox.Server, Name: accName()})

@@ -5,6 +5,7 @@ subcategory: ""
 description: |-
   A mailbox. Mail reaches it through an opalstack_address that names it. Deleting a mailbox deletes its mail, and the API silently takes it out of every address that delivered to it.
   The filter rules and the autoresponder are managed only where the configuration names them: procmailrc and each autoresponder_* attribute that is left out is never sent, and the mailbox keeps what it has.
+  password_wo keeps a password of your choosing out of the state, and pgp_key keeps the one the API chooses there only encrypted. The guide "Managing secrets" compares the options.
 ---
 
 # opalstack_mailuser (Resource)
@@ -13,6 +14,8 @@ A mailbox. Mail reaches it through an `opalstack_address` that names it. Deletin
 
 The filter rules and the autoresponder are managed only where the configuration names them: `procmailrc` and each `autoresponder_*` attribute that is left out is never sent, and the mailbox keeps what it has.
 
+`password_wo` keeps a password of your choosing out of the state, and `pgp_key` keeps the one the API chooses there only encrypted. The guide "Managing secrets" compares the options.
+
 ## Example Usage
 
 ```terraform
@@ -20,9 +23,18 @@ data "opalstack_server" "imap" {
   hostname = "imap1.us.opalstack.com"
 }
 
+variable "info_password" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+}
+
+# The password is sent and never kept in the state. Raise the version to send a new one.
 resource "opalstack_mailuser" "info" {
-  name           = "example_info"
-  imap_server_id = data.opalstack_server.imap.id
+  name                = "example_info"
+  imap_server_id      = data.opalstack_server.imap.id
+  password_wo         = var.info_password
+  password_wo_version = 1
 }
 
 # Filter rules and an autoresponder are optional. Whatever is left out is not managed.
@@ -53,18 +65,25 @@ resource "opalstack_mailuser" "sales" {
 
 ### Optional
 
+> **NOTE**: [Write-only arguments](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) are supported in Terraform 1.11 and later.
+
 - `autoresponder_enable` (Boolean) Whether the mailbox answers mail by itself. Switching it off keeps the subject, the message and the list. Left out, it is not managed: a new mailbox gets the API's default and an existing one keeps what the API has.
 - `autoresponder_message` (String) Text of the automatic answer. White space around it is not shown as a change. Set it to `""` to clear it. Left out, it is not managed: a new mailbox gets the API's default and an existing one keeps what the API has.
 - `autoresponder_noreply` (Set of String) Addresses the autoresponder never answers. Set it to `[]` to empty the list. Left out, the list is empty on a new object and is left as it is on an existing one.
 - `autoresponder_subject` (String) Subject of the automatic answer. White space around it is not shown as a change. Set it to `""` to clear it. Left out, it is not managed: a new mailbox gets the API's default and an existing one keeps what the API has.
-- `password` (String, Sensitive) Password of the mailbox. Left out, the API chooses one and reports it in `default_password`. It can be changed in place. The API never returns it, so a password changed outside Terraform is not noticed.
+- `password` (String, Sensitive) Password of the mailbox, kept in the state; `password_wo` keeps it out. Left out, the API chooses one and reports it in `default_password`. It can be changed in place. The API never returns it, so a password changed outside Terraform is not noticed.
+- `password_wo` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) Password of the mailbox, write-only: sent to the API and never kept in the plan or the state. It is sent on create, and afterwards only when `password_wo_version` changes. Needs Terraform or OpenTofu 1.11 or newer. Conflicts with `password`.
+- `password_wo_version` (Number) Any number, kept in the state. Change it to send `password_wo` again, which is how a write-only password is changed. Required with `password_wo`. Taking both out of the configuration changes nothing: the mailbox keeps its password.
+- `pgp_key` (String) A public OpenPGP key, ASCII-armored (`file("key.asc")`) or base64 of the binary form. When set, the password the API chooses on create is kept only encrypted to this key, in `encrypted_default_password`, and `default_password` stays null. The key is used on create only: changing it later encrypts nothing again and replaces nothing.
 - `procmailrc` (String) The mailbox's filter rules, in procmail's format. The API stores the text without its trailing newline, which is not shown as a change. Set it to `""` to remove the rules. Left out, it is not managed: a new mailbox gets the API's default and an existing one keeps what the API has.
 - `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 
 ### Read-Only
 
-- `default_password` (String, Sensitive) The password the API reported when it created the mailbox. The API reports it only then, so it is null for a mailbox that was imported.
+- `default_password` (String, Sensitive) The password the API reported when it created the mailbox. The API reports it only then, so it is null for a mailbox that was imported. Null as well with `pgp_key`, which keeps it encrypted in `encrypted_default_password` instead.
+- `encrypted_default_password` (String) With `pgp_key`, the password the API chose on create, encrypted to that key: base64 of a binary OpenPGP message, which `base64 -d | gpg -d` decrypts. Null otherwise, and for a mailbox that was imported.
 - `id` (String) UUID of the mailbox.
+- `key_fingerprint` (String) Fingerprint of the key `encrypted_default_password` is encrypted to, in upper-case hexadecimal, as `gpg --fingerprint` shows it without the spaces.
 
 <a id="nestedatt--timeouts"></a>
 ### Nested Schema for `timeouts`

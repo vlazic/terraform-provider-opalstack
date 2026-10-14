@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"maps"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -45,13 +46,12 @@ type dbUserResource struct {
 }
 
 type dbUserModel struct {
-	ID              types.String   `tfsdk:"id"`
-	Name            types.String   `tfsdk:"name"`
-	ServerID        types.String   `tfsdk:"server_id"`
-	Password        types.String   `tfsdk:"password"`
-	External        types.Bool     `tfsdk:"external"`
-	DefaultPassword types.String   `tfsdk:"default_password"`
-	Timeouts        timeouts.Value `tfsdk:"timeouts"`
+	ID       types.String   `tfsdk:"id"`
+	Name     types.String   `tfsdk:"name"`
+	ServerID types.String   `tfsdk:"server_id"`
+	External types.Bool     `tfsdk:"external"`
+	Timeouts timeouts.Value `tfsdk:"timeouts"`
+	passwordModel
 }
 
 func newMariaUserResource() resource.Resource { return &dbUserResource{engine: maria} }
@@ -66,15 +66,15 @@ func (r *dbUserResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 	replace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "A " + r.engine.name + " user. Give it access to a database through the database's " +
-			"`user_ids` or `readonly_user_ids`.",
+			"`user_ids` or `readonly_user_ids`.\n\n" + secretsNote,
 		Attributes: map[string]schema.Attribute{
 			"id":        schema.StringAttribute{MarkdownDescription: "UUID of the user.", Computed: true, PlanModifiers: keep},
 			"name":      schema.StringAttribute{MarkdownDescription: "Name of the user. Changing it replaces the user.", Required: true, PlanModifiers: replace},
 			"server_id": schema.StringAttribute{MarkdownDescription: "UUID of the server the user lives on. Changing it replaces the user.", Required: true, PlanModifiers: replace},
 			"password": schema.StringAttribute{
-				MarkdownDescription: "Password of the user. Left out, the API chooses one and reports it in " +
-					"`default_password`. It can be changed in place. The API never returns it, so a password " +
-					"changed outside Terraform is not noticed.",
+				MarkdownDescription: "Password of the user, kept in the state; `password_wo` keeps it out. Left out, " +
+					"the API chooses one and reports it in `default_password`. It can be changed in place. The API " +
+					"never returns it, so a password changed outside Terraform is not noticed.",
 				Optional:  true,
 				Sensitive: true,
 			},
@@ -86,7 +86,8 @@ func (r *dbUserResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 			},
 			"default_password": schema.StringAttribute{
 				MarkdownDescription: "The password the API reported when it created the user. The API reports it only " +
-					"then, so it is null for a user that was imported.",
+					"then, so it is null for a user that was imported. Null as well with `pgp_key`, which keeps it " +
+					"encrypted in `encrypted_default_password` instead.",
 				Computed:      true,
 				Sensitive:     true,
 				PlanModifiers: keep,
@@ -94,9 +95,10 @@ func (r *dbUserResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 			"timeouts": timeouts.Attributes(ctx, timeouts.Opts{Create: true, Update: true, Delete: true}),
 		},
 	}
+	maps.Copy(resp.Schema.Attributes, passwordAttributes("user"))
 }
 
-// set copies what a read returns. Neither password is part of that.
+// set copies what a read returns. No password is part of that.
 func (m *dbUserModel) set(u *client.DBUser) {
 	m.ID = types.StringValue(u.ID)
 	m.Name = types.StringValue(u.Name)
@@ -107,6 +109,8 @@ func (m *dbUserModel) set(u *client.DBUser) {
 func (r *dbUserResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var m dbUserModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
+	password := m.toSend(ctx, req.Config, passwordModel{}, &resp.Diagnostics)
+	key := m.pgpKey(&resp.Diagnostics)
 	ctx, cancel := withTimeout(ctx, m.Timeouts.Create, &resp.Diagnostics)
 	defer cancel()
 	if resp.Diagnostics.HasError() {
@@ -117,7 +121,7 @@ func (r *dbUserResource) Create(ctx context.Context, req resource.CreateRequest,
 	created, err := users.Create(ctx, client.DBUserCreate{
 		Server:   m.ServerID.ValueString(),
 		Name:     m.Name.ValueString(),
-		Password: m.Password.ValueString(),
+		Password: password,
 		External: knownBool(m.External),
 	})
 	if err != nil {
@@ -127,8 +131,11 @@ func (r *dbUserResource) Create(ctx context.Context, req resource.CreateRequest,
 	// In state before the wait, so a wait that fails does not leave an orphan,
 	// and with the password, which no later read can supply.
 	m.set(created)
-	m.DefaultPassword = stringOrNull(created.DefaultPassword)
+	m.keepDefault(created.DefaultPassword, key, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	ready, err := users.WaitReady(ctx, created.ID)
 	if err != nil {
@@ -138,7 +145,7 @@ func (r *dbUserResource) Create(ctx context.Context, req resource.CreateRequest,
 	// The create answers with a default_password even when it was sent one, so
 	// whether it honours a password is not established. An update is, so the
 	// password is set again that way.
-	if password := m.Password.ValueString(); password != "" {
+	if password != "" {
 		if _, err := users.Update(ctx, client.DBUserUpdate{ID: created.ID, Password: password}); err != nil {
 			resp.Diagnostics.AddError("Cannot set the password of the "+r.engine.name+" user", err.Error())
 			return
@@ -170,18 +177,15 @@ func (r *dbUserResource) Update(ctx context.Context, req resource.UpdateRequest,
 	var m, state dbUserModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	// Only what changed is sent. A password removed from the configuration is
+	// left as it is: the API has no way to unset one.
+	update := client.DBUserUpdate{ID: m.ID.ValueString(), Password: m.toSend(ctx, req.Config, state.passwordModel, &resp.Diagnostics)}
 	ctx, cancel := withTimeout(ctx, m.Timeouts.Update, &resp.Diagnostics)
 	defer cancel()
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Only what changed is sent. A password removed from the configuration is
-	// left as it is: the API has no way to unset one.
-	update := client.DBUserUpdate{ID: m.ID.ValueString()}
-	if !m.Password.Equal(state.Password) {
-		update.Password = m.Password.ValueString()
-	}
 	if !m.External.Equal(state.External) {
 		update.External = knownBool(m.External)
 	}

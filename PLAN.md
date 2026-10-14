@@ -56,6 +56,16 @@ Written to be read with no other context. Facts about the API are in
   account on 2026-10-13. The eight data sources are tested offline only. `TestAccOSVar` needs the
   write switch of osvar; the sweeper covers the kind.
 
+## In progress (2026-10-14), for version 0.3, not released
+
+- Phase 1, secrets, offline only so far: `password_wo` and `password_wo_version`, and `pgp_key`
+  with `encrypted_default_password` and `key_fingerprint`, on `opalstack_osuser`,
+  `opalstack_mariauser`, `opalstack_psqluser` and `opalstack_mailuser`; the guide "Managing
+  secrets". `make test` covers each of them against the fake API, including a state written with
+  the 0.2.0 schema (`TestPasswordUpgradeFrom020`). The extended `TestAccOSUser`, `TestAccMaria`,
+  `TestAccPsql` and `TestAccMail` have not run against the real account yet.
+- Phase 2, tokens as a resource, waits on a probe the owner runs.
+
 ## Decisions that differ from the first design notes
 
 - **Waiting fails fast only on a `_FAILED` state.** The spec's state enum has no failure value, but
@@ -92,6 +102,15 @@ Written to be read with no other context. Facts about the API are in
   `ReadKind`, and by the mailboxes it delivers to.
 - **`opalstack_osuser` takes an optional `password`** since 0.2: a login over SSH showed that the
   API honours one on create and on update. Without one the API's `default_password` stands.
+- **A password the configuration chooses can be write-only** since 0.3: `password_wo`, with
+  `password_wo_version` as the only trace in the state, the pattern of AWS's `password_wo`. It is
+  read from the configuration, because the framework nulls it in the plan. `password` stays, and
+  the two conflict.
+- **A password the API chooses can be kept encrypted** since 0.3, the pattern of AWS's
+  `aws_iam_access_key.pgp_key`: base64 of a binary OpenPGP message, no keybase. The key is used
+  on create only, because only the answer to a create carries the password, so a new key
+  re-encrypts nothing. The key is checked at plan time and again before the create, so an
+  unusable one never leaves an object whose password is lost.
 - **The framework's pointer getters turn an unknown value into a zero.** Requests are built with
   `knownBool`, `knownInt64` and `knownString` from `internal/provider/resource.go` instead.
 
@@ -119,6 +138,8 @@ Written to be read with no other context. Facts about the API are in
 
 ## Next
 
-1. The open items at the end of `API_FINDINGS.md`.
-2. Release 0.2.0.
-3. Not planned: quarantined mail, notices.
+1. Run the extended acceptance tests for 0.3 (write switches of osuser, mariauser, psqluser,
+   mailuser, domain and address), then sweep and switch off.
+2. The token probe, then the decision on phase 2.
+3. The open items at the end of `API_FINDINGS.md`.
+4. Not planned: quarantined mail, notices.

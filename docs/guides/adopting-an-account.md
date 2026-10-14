@@ -90,7 +90,8 @@ Then run `terraform apply` to record the imports in state (with
 - **A shell user's password.** `default_password` is reported once, when the provider creates a
   user. It is empty for an imported one. Naming `password` on an imported shell user, database
   user or mailbox sets that password: the state holds none after an import, so the next apply
-  sends the one in the configuration.
+  sends the one in the configuration. The same goes for `password_wo` with its
+  `password_wo_version`; see the guide "Managing secrets".
 - **App settings.** `json` on `opalstack_app` manages only the keys the configuration names. An
   imported app starts with none, so its settings are left as they are until you name the ones you
   want managed.

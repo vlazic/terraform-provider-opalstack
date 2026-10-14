@@ -375,7 +375,8 @@ import {
 }
 
 // mailUser012 is the mailbox resource with the schema of version 0.1.2, which
-// had none of the filter fields. It exists to write a state as that version did.
+// had none of the filter fields, nor those of version 0.3. It exists to write a
+// state as that version did.
 type mailUser012 struct{ mailUserResource }
 
 type mailUser012Model struct {
@@ -390,6 +391,9 @@ type mailUser012Model struct {
 func (r *mailUser012) Schema(ctx context.Context, req fwresource.SchemaRequest, resp *fwresource.SchemaResponse) {
 	r.mailUserResource.Schema(ctx, req, resp)
 	for _, name := range filterFields {
+		delete(resp.Schema.Attributes, name)
+	}
+	for name := range passwordAttributes("") {
 		delete(resp.Schema.Attributes, name)
 	}
 }
@@ -419,10 +423,10 @@ type mailUserUnrefreshed struct{ mailUserResource }
 func (r *mailUserUnrefreshed) Read(context.Context, fwresource.ReadRequest, *fwresource.ReadResponse) {
 }
 
-// mailOnly is a provider for the fake with one mailbox resource in place of today's.
-func mailOnly(f *fakeAPI, mailbox func() fwresource.Resource) map[string]func() (tfprotov6.ProviderServer, error) {
+// withOnly is a provider for the fake with one resource, often an older version of one of today's.
+func withOnly(f *fakeAPI, r func() fwresource.Resource) map[string]func() (tfprotov6.ProviderServer, error) {
 	return map[string]func() (tfprotov6.ProviderServer, error){
-		"opalstack": providerserver.NewProtocol6WithError(provider.Provider(oneResource{&opalstackProvider{version: "test", tune: f.tune}, mailbox})),
+		"opalstack": providerserver.NewProtocol6WithError(provider.Provider(oneResource{&opalstackProvider{version: "test", tune: f.tune}, r})),
 	}
 }
 
@@ -441,7 +445,7 @@ func (p oneResource) Resources(context.Context) []func() fwresource.Resource {
 // version must be empty, and a later change must send only what it changes.
 func TestMailUserUpgradeFrom012(t *testing.T) {
 	f, factories, block := fakeProvider(t)
-	old := mailOnly(f, func() fwresource.Resource { return &mailUser012{} })
+	old := withOnly(f, func() fwresource.Resource { return &mailUser012{} })
 	const box = "opalstack_mailuser.m"
 	config := func(extra string) string { return block + boxConfig(extra) }
 	var before obj
@@ -510,12 +514,12 @@ func TestMailUserUpgradeFrom012Unrefreshed(t *testing.T) {
 	resource.UnitTest(t, resource.TestCase{
 		Steps: []resource.TestStep{
 			{
-				ProtoV6ProviderFactories: mailOnly(f, func() fwresource.Resource { return &mailUser012{} }),
+				ProtoV6ProviderFactories: withOnly(f, func() fwresource.Resource { return &mailUser012{} }),
 				Config:                   block + boxConfig(""),
 			},
 			{
 				PreConfig:                func() { setFilter(f, f.ids("mailuser")[0]) },
-				ProtoV6ProviderFactories: mailOnly(f, func() fwresource.Resource { return &mailUserUnrefreshed{} }),
+				ProtoV6ProviderFactories: withOnly(f, func() fwresource.Resource { return &mailUserUnrefreshed{} }),
 				Config:                   block + boxConfig(password),
 				ConfigPlanChecks:         accExpect(box, plancheck.ResourceActionUpdate),
 				Check: resource.ComposeAggregateTestCheckFunc(

@@ -2,9 +2,18 @@ data "opalstack_server" "imap" {
   hostname = "imap1.us.opalstack.com"
 }
 
+variable "info_password" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+}
+
+# The password is sent and never kept in the state. Raise the version to send a new one.
 resource "opalstack_mailuser" "info" {
-  name           = "example_info"
-  imap_server_id = data.opalstack_server.imap.id
+  name                = "example_info"
+  imap_server_id      = data.opalstack_server.imap.id
+  password_wo         = var.info_password
+  password_wo_version = 1
 }
 
 # Filter rules and an autoresponder are optional. Whatever is left out is not managed.

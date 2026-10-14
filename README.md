@@ -3,7 +3,7 @@
 A Terraform and OpenTofu provider for [Opalstack](https://www.opalstack.com) managed hosting, built
 on terraform-plugin-framework. Opalstack is unrelated to Opal (opal.dev).
 
-**Status: early. Version 0.2 is released (see [`CHANGELOG.md`](CHANGELOG.md)).**
+**Status: early. Version 0.2 is released, 0.3 is in progress (see [`CHANGELOG.md`](CHANGELOG.md)).**
 It is a personal project, not an Opalstack product. Thirteen resources and fourteen data sources
 exist and are documented in [`docs/`](docs/index.md). Every resource passes acceptance tests
 against a real account, last run on 2026-10-14. The eight data sources added in version 0.2 are
@@ -24,6 +24,10 @@ terraform {
 To bring an existing account under Terraform without changing it, set `read_only = true` on the
 provider and follow [the adoption guide](docs/guides/adopting-an-account.md).
 
+Passwords can stay out of the state: `password_wo` sends one without storing it, and `pgp_key`
+keeps the one Opalstack generates only encrypted to your key. See
+[the secrets guide](docs/guides/managing-secrets.md).
+
 | Resources | Data sources |
 |---|---|
 | `opalstack_domain`, `opalstack_dnsrecord`, `opalstack_osuser`, `opalstack_app`, `opalstack_site`, `opalstack_cert`, `opalstack_mariauser`, `opalstack_mariadb`, `opalstack_psqluser`, `opalstack_psqldb`, `opalstack_mailuser`, `opalstack_address`, `opalstack_osvar` | `opalstack_server`, `opalstack_ip`, `opalstack_osuser`, `opalstack_domain`, `opalstack_app`, `opalstack_site`, `opalstack_dnsrecord`, `opalstack_cert`, `opalstack_mariauser`, `opalstack_mariadb`, `opalstack_psqluser`, `opalstack_psqldb`, `opalstack_mailuser`, `opalstack_address` |
@@ -35,7 +39,8 @@ provider and follow [the adoption guide](docs/guides/adopting-an-account.md).
 
 ## Requirements
 
-Go 1.25 or newer. Terraform 1.5 or newer, or OpenTofu.
+Go 1.25 or newer. Terraform 1.5 or newer, or OpenTofu. The write-only `password_wo` needs
+Terraform 1.11 or OpenTofu 1.11 or newer.
 
 ## Development
 

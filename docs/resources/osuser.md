@@ -5,6 +5,7 @@ subcategory: ""
 description: |-
   A shell user. Apps belong to one and run as it. Only its password can be changed in place, and deleting one deletes its home directory and every app that belongs to it.
   The API chooses a password and reports it once, in default_password, whether or not the configuration gives a password of its own. The API has no way to manage SSH keys.
+  password_wo keeps a password of your choosing out of the state, and pgp_key keeps the one the API chooses there only encrypted. The guide "Managing secrets" compares the options.
 ---
 
 # opalstack_osuser (Resource)
@@ -13,6 +14,8 @@ A shell user. Apps belong to one and run as it. Only its password can be changed
 
 The API chooses a password and reports it once, in `default_password`, whether or not the configuration gives a `password` of its own. The API has no way to manage SSH keys.
 
+`password_wo` keeps a password of your choosing out of the state, and `pgp_key` keeps the one the API chooses there only encrypted. The guide "Managing secrets" compares the options.
+
 ## Example Usage
 
 ```terraform
@@ -20,15 +23,31 @@ data "opalstack_server" "web" {
   hostname = "opal1.opalstack.com"
 }
 
+# The API chooses the password and reports it once. With pgp_key the state keeps
+# it only encrypted: decrypt it with
+#   terraform output -raw deploy_password_encrypted | base64 -d | gpg --decrypt
 resource "opalstack_osuser" "deploy" {
   name      = "deploy"
   server_id = data.opalstack_server.web.id
+  pgp_key   = file("${path.module}/ops.asc")
 }
 
-# The API chooses the password and reports it once.
-output "deploy_password" {
-  value     = opalstack_osuser.deploy.default_password
+output "deploy_password_encrypted" {
+  value = opalstack_osuser.deploy.encrypted_default_password
+}
+
+# A password of your own, kept out of the state. Raise the version to send a new one.
+variable "files_password" {
+  type      = string
   sensitive = true
+  ephemeral = true
+}
+
+resource "opalstack_osuser" "files" {
+  name                = "files"
+  server_id           = data.opalstack_server.web.id
+  password_wo         = var.files_password
+  password_wo_version = 1
 }
 ```
 
@@ -42,13 +61,20 @@ output "deploy_password" {
 
 ### Optional
 
-- `password` (String, Sensitive) Password of the shell user, for SSH and SFTP. Left out, the only password is the one the API chooses and reports in `default_password`. It can be changed in place. The API never returns it, so a password changed outside Terraform is not noticed, and taking the attribute out of the configuration changes nothing.
+> **NOTE**: [Write-only arguments](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) are supported in Terraform 1.11 and later.
+
+- `password` (String, Sensitive) Password of the shell user, for SSH and SFTP, kept in the state; `password_wo` keeps it out. Left out, the only password is the one the API chooses and reports in `default_password`. It can be changed in place. The API never returns it, so a password changed outside Terraform is not noticed, and taking the attribute out of the configuration changes nothing.
+- `password_wo` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) Password of the shell user, write-only: sent to the API and never kept in the plan or the state. It is sent on create, and afterwards only when `password_wo_version` changes. Needs Terraform or OpenTofu 1.11 or newer. Conflicts with `password`.
+- `password_wo_version` (Number) Any number, kept in the state. Change it to send `password_wo` again, which is how a write-only password is changed. Required with `password_wo`. Taking both out of the configuration changes nothing: the shell user keeps its password.
+- `pgp_key` (String) A public OpenPGP key, ASCII-armored (`file("key.asc")`) or base64 of the binary form. When set, the password the API chooses on create is kept only encrypted to this key, in `encrypted_default_password`, and `default_password` stays null. The key is used on create only: changing it later encrypts nothing again and replaces nothing.
 - `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 
 ### Read-Only
 
-- `default_password` (String, Sensitive) The password the API chose when it created the shell user. The API reports it only then, so it is null for a shell user that was imported. Once a `password` is set by an update, the API refuses this one. A shell user created with a `password` still gets one here, and whether it works for login as well was not tried: treat it as a second working credential held in the state.
+- `default_password` (String, Sensitive) The password the API chose when it created the shell user. The API reports it only then, so it is null for a shell user that was imported. Once a `password` is set by an update, the API refuses this one. A shell user created with a `password` still gets one here, and whether it works for login as well was not tried: treat it as a second working credential held in the state. With `pgp_key` it is null, and kept encrypted in `encrypted_default_password` instead.
+- `encrypted_default_password` (String) With `pgp_key`, the password the API chose on create, encrypted to that key: base64 of a binary OpenPGP message, which `base64 -d | gpg -d` decrypts. Null otherwise, and for a shell user that was imported.
 - `id` (String) UUID of the shell user.
+- `key_fingerprint` (String) Fingerprint of the key `encrypted_default_password` is encrypted to, in upper-case hexadecimal, as `gpg --fingerprint` shows it without the spaces.
 
 <a id="nestedatt--timeouts"></a>
 ### Nested Schema for `timeouts`

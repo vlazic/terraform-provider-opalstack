@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"maps"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -21,12 +22,11 @@ var (
 type osuserResource struct{ baseResource }
 
 type osuserModel struct {
-	ID              types.String   `tfsdk:"id"`
-	Name            types.String   `tfsdk:"name"`
-	ServerID        types.String   `tfsdk:"server_id"`
-	Password        types.String   `tfsdk:"password"`
-	DefaultPassword types.String   `tfsdk:"default_password"`
-	Timeouts        timeouts.Value `tfsdk:"timeouts"`
+	ID       types.String   `tfsdk:"id"`
+	Name     types.String   `tfsdk:"name"`
+	ServerID types.String   `tfsdk:"server_id"`
+	Timeouts timeouts.Value `tfsdk:"timeouts"`
+	passwordModel
 }
 
 func newOSUserResource() resource.Resource { return &osuserResource{} }
@@ -40,7 +40,7 @@ func (r *osuserResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 		MarkdownDescription: "A shell user. Apps belong to one and run as it. Only its password can be changed in " +
 			"place, and deleting one deletes its home directory **and every app that belongs to it**.\n\n" +
 			"The API chooses a password and reports it once, in `default_password`, whether or not the " +
-			"configuration gives a `password` of its own. The API has no way to manage SSH keys.",
+			"configuration gives a `password` of its own. The API has no way to manage SSH keys.\n\n" + secretsNote,
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "UUID of the shell user.",
@@ -58,7 +58,8 @@ func (r *osuserResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"password": schema.StringAttribute{
-				MarkdownDescription: "Password of the shell user, for SSH and SFTP. Left out, the only password is " +
+				MarkdownDescription: "Password of the shell user, for SSH and SFTP, kept in the state; `password_wo` " +
+					"keeps it out. Left out, the only password is " +
 					"the one the API chooses and reports in `default_password`. It can be changed in place. The " +
 					"API never returns it, so a password changed outside Terraform is not noticed, and taking " +
 					"the attribute out of the configuration changes nothing.",
@@ -70,7 +71,8 @@ func (r *osuserResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 					"then, so it is null for a shell user that was imported. Once a `password` is set by an " +
 					"update, the API refuses this one. A shell user created with a `password` still gets one " +
 					"here, and whether it works for login as well was not tried: treat it as a second working " +
-					"credential held in the state.",
+					"credential held in the state. With `pgp_key` it is null, and kept encrypted in " +
+					"`encrypted_default_password` instead.",
 				Computed:      true,
 				Sensitive:     true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
@@ -78,9 +80,10 @@ func (r *osuserResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 			"timeouts": timeouts.Attributes(ctx, timeouts.Opts{Create: true, Update: true, Delete: true}),
 		},
 	}
+	maps.Copy(resp.Schema.Attributes, passwordAttributes("shell user"))
 }
 
-// set copies what a read returns. default_password is not part of that.
+// set copies what a read returns. No password is part of that.
 func (m *osuserModel) set(u *client.OSUser) {
 	m.ID = types.StringValue(u.ID)
 	m.Name = types.StringValue(u.Name)
@@ -90,6 +93,8 @@ func (m *osuserModel) set(u *client.OSUser) {
 func (r *osuserResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var m osuserModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
+	password := m.toSend(ctx, req.Config, passwordModel{}, &resp.Diagnostics)
+	key := m.pgpKey(&resp.Diagnostics)
 	ctx, cancel := withTimeout(ctx, m.Timeouts.Create, &resp.Diagnostics)
 	defer cancel()
 	if resp.Diagnostics.HasError() {
@@ -98,7 +103,7 @@ func (r *osuserResource) Create(ctx context.Context, req resource.CreateRequest,
 
 	users := r.client.OSUsers()
 	created, err := users.Create(ctx, client.OSUserCreate{
-		Server: m.ServerID.ValueString(), Name: m.Name.ValueString(), Password: m.Password.ValueString(),
+		Server: m.ServerID.ValueString(), Name: m.Name.ValueString(), Password: password,
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot create the shell user", err.Error())
@@ -107,8 +112,11 @@ func (r *osuserResource) Create(ctx context.Context, req resource.CreateRequest,
 	// In state before the wait, so a wait that fails does not leave an orphan,
 	// and with the password, which no later read can supply.
 	m.set(created)
-	m.DefaultPassword = stringOrNull(created.DefaultPassword)
+	m.keepDefault(created.DefaultPassword, key, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	ready, err := users.WaitReady(ctx, created.ID)
 	if err != nil {
@@ -140,12 +148,13 @@ func (r *osuserResource) Update(ctx context.Context, req resource.UpdateRequest,
 	var m, state osuserModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	password := m.toSend(ctx, req.Config, state.passwordModel, &resp.Diagnostics)
 	ctx, cancel := withTimeout(ctx, m.Timeouts.Update, &resp.Diagnostics)
 	defer cancel()
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if password := m.Password.ValueString(); password != "" && !m.Password.Equal(state.Password) {
+	if password != "" {
 		users := r.client.OSUsers()
 		if _, err := users.Update(ctx, client.OSUserUpdate{ID: m.ID.ValueString(), Password: password}); err != nil {
 			resp.Diagnostics.AddError("Cannot change the shell user's password", err.Error())
