@@ -71,26 +71,11 @@ func (r *dbUserResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 			"id":        schema.StringAttribute{MarkdownDescription: "UUID of the user.", Computed: true, PlanModifiers: keep},
 			"name":      schema.StringAttribute{MarkdownDescription: "Name of the user. Changing it replaces the user.", Required: true, PlanModifiers: replace},
 			"server_id": schema.StringAttribute{MarkdownDescription: "UUID of the server the user lives on. Changing it replaces the user.", Required: true, PlanModifiers: replace},
-			"password": schema.StringAttribute{
-				MarkdownDescription: "Password of the user, kept in the state; `password_wo` keeps it out. Left out, " +
-					"the API chooses one and reports it in `default_password`. It can be changed in place. The API " +
-					"never returns it, so a password changed outside Terraform is not noticed.",
-				Optional:  true,
-				Sensitive: true,
-			},
 			"external": schema.BoolAttribute{
 				MarkdownDescription: "Whether the user may connect from outside the server.",
 				Optional:            true,
 				Computed:            true,
 				PlanModifiers:       []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()},
-			},
-			"default_password": schema.StringAttribute{
-				MarkdownDescription: "The password the API reported when it created the user. The API reports it only " +
-					"then, so it is null for a user that was imported. Null as well with `pgp_key`, which keeps it " +
-					"encrypted in `encrypted_default_password` instead.",
-				Computed:      true,
-				Sensitive:     true,
-				PlanModifiers: keep,
 			},
 			"timeouts": timeouts.Attributes(ctx, timeouts.Opts{Create: true, Update: true, Delete: true}),
 		},

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 )
 
@@ -85,6 +87,11 @@ func pgpEncrypt(key *openpgp.Entity, text string) (string, error) {
 	return base64.StdEncoding.EncodeToString(out.Bytes()), nil
 }
 
+// unusablePGPKey is the error for a pgp_key at p that pgpPublicKey refused.
+func unusablePGPKey(p path.Path, err error) diag.Diagnostic {
+	return diag.NewAttributeErrorDiagnostic(p, "Unusable pgp_key", "The pgp_key cannot be used: "+err.Error()+".")
+}
+
 // pgpKeyValidator refuses at plan time a pgp_key that the create would refuse.
 type pgpKeyValidator struct{}
 
@@ -99,6 +106,6 @@ func (pgpKeyValidator) ValidateString(_ context.Context, req validator.StringReq
 		return
 	}
 	if _, err := pgpPublicKey(req.ConfigValue.ValueString(), time.Now()); err != nil {
-		resp.Diagnostics.AddAttributeError(req.Path, "Unusable pgp_key", "The pgp_key cannot be used: "+err.Error()+".")
+		resp.Diagnostics.Append(unusablePGPKey(req.Path, err))
 	}
 }

@@ -40,7 +40,8 @@ func (r *osuserResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 		MarkdownDescription: "A shell user. Apps belong to one and run as it. Only its password can be changed in " +
 			"place, and deleting one deletes its home directory **and every app that belongs to it**.\n\n" +
 			"The API chooses a password and reports it once, in `default_password`, whether or not the " +
-			"configuration gives a `password` of its own. The API has no way to manage SSH keys.\n\n" + secretsNote,
+			"configuration gives a `password` of its own. The password is for SSH and SFTP; the API has no way " +
+			"to manage SSH keys.\n\n" + secretsNote,
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "UUID of the shell user.",
@@ -57,30 +58,16 @@ func (r *osuserResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 				Required:            true,
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
-			"password": schema.StringAttribute{
-				MarkdownDescription: "Password of the shell user, for SSH and SFTP, kept in the state; `password_wo` " +
-					"keeps it out. Left out, the only password is " +
-					"the one the API chooses and reports in `default_password`. It can be changed in place. The " +
-					"API never returns it, so a password changed outside Terraform is not noticed, and taking " +
-					"the attribute out of the configuration changes nothing.",
-				Optional:  true,
-				Sensitive: true,
-			},
-			"default_password": schema.StringAttribute{
-				MarkdownDescription: "The password the API chose when it created the shell user. The API reports it only " +
-					"then, so it is null for a shell user that was imported. Once a `password` is set by an " +
-					"update, the API refuses this one. A shell user created with a `password` still gets one " +
-					"here, and whether it works for login as well was not tried: treat it as a second working " +
-					"credential held in the state. With `pgp_key` it is null, and kept encrypted in " +
-					"`encrypted_default_password` instead.",
-				Computed:      true,
-				Sensitive:     true,
-				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
-			},
 			"timeouts": timeouts.Attributes(ctx, timeouts.Opts{Create: true, Update: true, Delete: true}),
 		},
 	}
 	maps.Copy(resp.Schema.Attributes, passwordAttributes("shell user"))
+	defaultPassword := resp.Schema.Attributes["default_password"].(schema.StringAttribute)
+	defaultPassword.MarkdownDescription += " Once a password is set by an update, through `password` or " +
+		"`password_wo`, the API refuses this one. A shell user created with a `password` still gets one here, " +
+		"and whether it works for login as well was not tried: treat it as a second working credential held " +
+		"in the state."
+	resp.Schema.Attributes["default_password"] = defaultPassword
 }
 
 // set copies what a read returns. No password is part of that.

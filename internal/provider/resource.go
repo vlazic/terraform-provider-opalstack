@@ -240,12 +240,29 @@ type passwordModel struct {
 	KeyFingerprint           types.String `tfsdk:"key_fingerprint"`
 }
 
-// passwordAttributes are the attributes of passwordModel that version 0.3
-// added, for an object called what. Each is null unless the configuration
-// names it, so a configuration written before plans nothing new.
+// passwordAttributes are the attributes of passwordModel, for an object called
+// what. Those version 0.3 added are null unless the configuration names them, so a
+// configuration written before plans nothing new.
 func passwordAttributes(what string) map[string]schema.Attribute {
 	keep := []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
 	return map[string]schema.Attribute{
+		"password": schema.StringAttribute{
+			MarkdownDescription: "Password of the " + what + ", kept in the state; `password_wo` keeps it out. Left " +
+				"out, the API chooses one and reports it in `default_password`. It can be changed in place. The " +
+				"API never returns it, so a password changed outside Terraform is not noticed, and taking the " +
+				"attribute out of the configuration changes nothing.",
+			Optional:  true,
+			Sensitive: true,
+		},
+		"default_password": schema.StringAttribute{
+			MarkdownDescription: "The password the API reported when it created the " + what + ". The API reports it " +
+				"only then, so it is null for a " + what + " that was imported. Null as well for one created with " +
+				"`pgp_key`, which keeps it encrypted in `encrypted_default_password` instead, or with " +
+				"`password_wo`, which keeps no password in the state.",
+			Computed:      true,
+			Sensitive:     true,
+			PlanModifiers: keep,
+		},
 		"password_wo": schema.StringAttribute{
 			MarkdownDescription: "Password of the " + what + ", write-only: sent to the API and never kept in the plan " +
 				"or the state. It is sent on create, and afterwards only when `password_wo_version` changes. " +
@@ -316,10 +333,14 @@ func (m *passwordModel) pgpKey(diags *diag.Diagnostics) *openpgp.Entity {
 	}
 	key, err := pgpPublicKey(m.PGPKey.ValueString(), time.Now())
 	if err != nil {
-		diags.AddAttributeError(path.Root("pgp_key"), "Unusable pgp_key", "The pgp_key cannot be used: "+err.Error()+".")
+		diags.Append(unusablePGPKey(path.Root("pgp_key"), err))
 	}
 	return key
 }
+
+// encryptDefault is pgpEncrypt, a variable only so that a test can make it fail
+// after a create succeeded.
+var encryptDefault = pgpEncrypt
 
 // keepDefault keeps the password the API reported on create: in the clear, or
 // encrypted to key when there is one. With password_wo and no key it is not
@@ -333,7 +354,7 @@ func (m *passwordModel) keepDefault(password string, key *openpgp.Entity, diags 
 	case key == nil:
 		m.DefaultPassword = types.StringValue(password)
 	default:
-		encrypted, err := pgpEncrypt(key, password)
+		encrypted, err := encryptDefault(key, password)
 		if err != nil {
 			diags.AddError("Cannot encrypt the password the API chose", err.Error())
 			return

@@ -219,11 +219,14 @@ resource "opalstack_dnsrecord" "r" {
 	})
 }
 
+// accOSUser is the shell user of TestAccOSUser, which accLogin logs in as.
+const accOSUser = "opalstack_osuser.u"
+
 func TestAccOSUser(t *testing.T) {
 	sandbox := accEnv(t, "OPALSTACK_TEST_OSUSER")
 	accEnv(t, tokenEnvVar)
-	first, second := accName(), accName()
-	const addr = "opalstack_osuser.u"
+	first, second, third := accName(), accName(), accName()
+	const addr = accOSUser
 	// The new user goes on the server the sandbox user lives on.
 	configWith := func(name, extra string) string {
 		return accProvider + fmt.Sprintf(`
@@ -237,8 +240,8 @@ resource "opalstack_osuser" "u" {
 	}
 	config := func(name string) string { return configWith(name, "") }
 	noPassword := []string{"default_password", "password"}
-	woFirst, woSecond := accPassword(), accPassword()
-	woPlan, woState := neverKept(addr, woFirst, woSecond)
+	woFirst, woSecond, woCreate := accPassword(), accPassword(), accPassword()
+	woPlan, woState := neverKept(woFirst, woSecond, woCreate)
 	key := testPGPKey(t, nil)
 
 	resource.Test(t, resource.TestCase{
@@ -263,21 +266,32 @@ resource "opalstack_osuser" "u" {
 				Config:            configWith(first, writeOnly(woFirst, 1)),
 				ConfigPlanChecks:  resource.ConfigPlanChecks{PreApply: append(woPlan.PreApply, plancheck.ExpectResourceAction(addr, plancheck.ResourceActionUpdate))},
 				ConfigStateChecks: woState,
-				Check:             accLogin(t, addr, func(*terraform.State) (string, error) { return woFirst, nil }),
+				Check:             accLogin(t, func(*terraform.State) (string, error) { return woFirst, nil }),
 			},
 			{ // a new version sends the new one
 				Config:            configWith(first, writeOnly(woSecond, 2)),
 				ConfigPlanChecks:  resource.ConfigPlanChecks{PreApply: append(woPlan.PreApply, plancheck.ExpectResourceAction(addr, plancheck.ResourceActionUpdate))},
 				ConfigStateChecks: woState,
-				Check:             accLogin(t, addr, func(*terraform.State) (string, error) { return woSecond, nil }),
+				Check:             accLogin(t, func(*terraform.State) (string, error) { return woSecond, nil }),
 			},
-			{ // created with a key of the run's own: the API's password is kept only encrypted, and works
-				Config:           configWith(second, fmt.Sprintf("pgp_key = %q", armored(t, key, false))),
-				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
+			{ // created with a write-only password and no key: the API's own is kept nowhere, and the given one works
+				Config:            configWith(second, writeOnly(woCreate, 1)),
+				ConfigPlanChecks:  resource.ConfigPlanChecks{PreApply: append(woPlan.PreApply, plancheck.ExpectResourceAction(addr, plancheck.ResourceActionDestroyBeforeCreate))},
+				ConfigStateChecks: woState,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(addr, "name", second),
+					resource.TestCheckNoResourceAttr(addr, "default_password"),
+					resource.TestCheckNoResourceAttr(addr, "encrypted_default_password"),
+					accLogin(t, func(*terraform.State) (string, error) { return woCreate, nil }),
+				),
+			},
+			{ // created with a key of the run's own: the API's password is kept only encrypted, and works
+				Config:           configWith(third, fmt.Sprintf("pgp_key = %q", armored(t, key, false))),
+				ConfigPlanChecks: accExpect(addr, plancheck.ResourceActionDestroyBeforeCreate),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(addr, "name", third),
 					accEncrypted(addr, key),
-					accLogin(t, addr, accDecrypted(addr, key)),
+					accLogin(t, accDecrypted(addr, key)),
 				),
 			},
 		},
@@ -296,11 +310,11 @@ provider "opalstack" {
 `, accPrefix, osuserID), osuserID
 }
 
-// accLogin logs in over SSH, once, as the shell user at addr, with the
+// accLogin logs in over SSH, once, as the shell user at accOSUser, with the
 // password the function gives. The failure masks the host and any address.
-func accLogin(t *testing.T, addr string, password func(*terraform.State) (string, error)) resource.TestCheckFunc {
+func accLogin(t *testing.T, password func(*terraform.State) (string, error)) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		user := s.RootModule().Resources[addr].Primary.Attributes
+		user := s.RootModule().Resources[accOSUser].Primary.Attributes
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		host, err := webHost(ctx, accClient(t), user["server_id"])
@@ -592,7 +606,7 @@ resource "%[8]s" "d" {
 	password := `password = "` + accPassword() + `"`
 	noPassword := []string{"default_password", "password"}
 	woFirst, woSecond := accPassword(), accPassword()
-	woPlan, woState := neverKept(user, woFirst, woSecond)
+	woPlan, woState := neverKept(woFirst, woSecond)
 	noAccess := "user_ids = []\n  readonly_user_ids = []"
 	key := testPGPKey(t, nil)
 
@@ -753,7 +767,7 @@ resource "opalstack_address" "a" {
 	}
 	delivered := "mailuser_ids = [opalstack_mailuser.m.id]"
 	woFirst, woSecond := accPassword(), accPassword()
-	woPlan, woState := neverKept(box, woFirst, woSecond)
+	woPlan, woState := neverKept(woFirst, woSecond)
 	key := testPGPKey(t, nil)
 	password := `password = "` + accPassword() + `"`
 	noPassword := []string{"default_password", "password"}

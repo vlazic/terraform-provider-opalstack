@@ -78,21 +78,6 @@ func (r *mailUserResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				Required:      true,
 				PlanModifiers: replace,
 			},
-			"password": schema.StringAttribute{
-				MarkdownDescription: "Password of the mailbox, kept in the state; `password_wo` keeps it out. Left " +
-					"out, the API chooses one and reports it in `default_password`. It can be changed in place. The " +
-					"API never returns it, so a password changed outside Terraform is not noticed.",
-				Optional:  true,
-				Sensitive: true,
-			},
-			"default_password": schema.StringAttribute{
-				MarkdownDescription: "The password the API reported when it created the mailbox. The API reports it " +
-					"only then, so it is null for a mailbox that was imported. Null as well with `pgp_key`, which " +
-					"keeps it encrypted in `encrypted_default_password` instead.",
-				Computed:      true,
-				Sensitive:     true,
-				PlanModifiers: keep,
-			},
 			"procmailrc": schema.StringAttribute{
 				MarkdownDescription: "The mailbox's filter rules, in procmail's format. The API stores the text " +
 					"without its trailing newline, which is not shown as a change. Set it to `\"\"` to remove " +

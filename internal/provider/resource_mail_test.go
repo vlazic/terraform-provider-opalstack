@@ -393,7 +393,7 @@ func (r *mailUser012) Schema(ctx context.Context, req fwresource.SchemaRequest, 
 	for _, name := range filterFields {
 		delete(resp.Schema.Attributes, name)
 	}
-	for name := range passwordAttributes("") {
+	for _, name := range addedIn030 {
 		delete(resp.Schema.Attributes, name)
 	}
 }

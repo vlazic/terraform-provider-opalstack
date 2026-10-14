@@ -48,7 +48,7 @@ resource "opalstack_mariauser" "blog" {
 > **NOTE**: [Write-only arguments](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) are supported in Terraform 1.11 and later.
 
 - `external` (Boolean) Whether the user may connect from outside the server.
-- `password` (String, Sensitive) Password of the user, kept in the state; `password_wo` keeps it out. Left out, the API chooses one and reports it in `default_password`. It can be changed in place. The API never returns it, so a password changed outside Terraform is not noticed.
+- `password` (String, Sensitive) Password of the user, kept in the state; `password_wo` keeps it out. Left out, the API chooses one and reports it in `default_password`. It can be changed in place. The API never returns it, so a password changed outside Terraform is not noticed, and taking the attribute out of the configuration changes nothing.
 - `password_wo` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) Password of the user, write-only: sent to the API and never kept in the plan or the state. It is sent on create, and afterwards only when `password_wo_version` changes. Needs Terraform or OpenTofu 1.11 or newer. Conflicts with `password`. Without `pgp_key`, the password the API generates on create is then not kept either.
 - `password_wo_version` (Number) Any number, kept in the state. Change it to send `password_wo` again, which is how a write-only password is changed. Required with `password_wo`. Taking both out of the configuration changes nothing: the user keeps its password.
 - `pgp_key` (String) A public OpenPGP key, ASCII-armored (`file("key.asc")`) or base64 of the binary form. When set, the password the API chooses on create is kept only encrypted to this key, in `encrypted_default_password`, and `default_password` stays null. The key is used on create only: changing it later encrypts nothing again and replaces nothing.
@@ -56,7 +56,7 @@ resource "opalstack_mariauser" "blog" {
 
 ### Read-Only
 
-- `default_password` (String, Sensitive) The password the API reported when it created the user. The API reports it only then, so it is null for a user that was imported. Null as well with `pgp_key`, which keeps it encrypted in `encrypted_default_password` instead.
+- `default_password` (String, Sensitive) The password the API reported when it created the user. The API reports it only then, so it is null for a user that was imported. Null as well for one created with `pgp_key`, which keeps it encrypted in `encrypted_default_password` instead, or with `password_wo`, which keeps no password in the state.
 - `encrypted_default_password` (String) With `pgp_key`, the password the API chose on create, encrypted to that key: base64 of a binary OpenPGP message, which `base64 -d | gpg -d` decrypts. Null otherwise, and for a user that was imported.
 - `id` (String) UUID of the user.
 - `key_fingerprint` (String) Fingerprint of the key `encrypted_default_password` is encrypted to, in upper-case hexadecimal, as `gpg --fingerprint` shows it without the spaces.

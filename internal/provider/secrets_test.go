@@ -3,12 +3,16 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 
 	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
@@ -93,15 +97,18 @@ func (c secretCheck) CheckState(_ context.Context, req statecheck.CheckStateRequ
 	}
 }
 
-// neverKept checks that the plan and the state of a step hold none of the secrets.
-func neverKept(addr string, secrets ...string) (resource.ConfigPlanChecks, []statecheck.StateCheck) {
-	plan := []plancheck.PlanCheck{plancheck.ExpectKnownValue(addr, tfjsonpath.New("password_wo"), knownvalue.Null())}
-	state := []statecheck.StateCheck{statecheck.ExpectKnownValue(addr, tfjsonpath.New("password_wo"), knownvalue.Null())}
+// neverKept checks that the plan and the state of a step hold none of the
+// secrets, in any attribute. That password_wo itself is null in both needs no
+// check: the framework nulls a write-only attribute whatever the resource does.
+func neverKept(secrets ...string) (resource.ConfigPlanChecks, []statecheck.StateCheck) {
+	var plan []plancheck.PlanCheck
+	var state []statecheck.StateCheck
 	for _, s := range secrets {
 		plan = append(plan, secretCheck{s})
 		state = append(state, secretCheck{s})
 	}
-	return resource.ConfigPlanChecks{PreApply: plan}, state
+	// Clipped, so that each step that appends to them gets a slice of its own.
+	return resource.ConfigPlanChecks{PreApply: slices.Clip(plan)}, slices.Clip(state)
 }
 
 // A write-only password is sent on create, sent again only when its version
@@ -133,8 +140,8 @@ func TestPasswordWriteOnly(t *testing.T) {
 					return nil
 				}
 			}
-			firstPlan, firstState := neverKept(addr, first)
-			secondPlan, secondState := neverKept(addr, first, second)
+			firstPlan, firstState := neverKept(first)
+			secondPlan, secondState := neverKept(first, second)
 			onCreate := 0 // updates that follow the create
 			if k.resent {
 				onCreate = 1
@@ -235,17 +242,16 @@ func TestPasswordValidators(t *testing.T) {
 
 // unchecked is one of today's resources whose pgp_key has no validator, so an
 // unusable key reaches the create, as one that expired since the plan would.
-type unchecked struct{ before030 }
+// It cannot import, which the test does not need.
+type unchecked struct {
+	fwresource.ResourceWithConfigure
+}
 
 func (r unchecked) Schema(ctx context.Context, req fwresource.SchemaRequest, resp *fwresource.SchemaResponse) {
-	r.inner.Schema(ctx, req, resp)
+	r.ResourceWithConfigure.Schema(ctx, req, resp)
 	key := resp.Schema.Attributes["pgp_key"].(schema.StringAttribute)
 	key.Validators = nil
 	resp.Schema.Attributes["pgp_key"] = key
-}
-
-func (r unchecked) Create(ctx context.Context, req fwresource.CreateRequest, resp *fwresource.CreateResponse) {
-	r.inner.Create(ctx, req, resp)
 }
 
 // The create checks the key again, before anything is sent.
@@ -255,7 +261,7 @@ func TestPGPKeyCheckedBeforeCreate(t *testing.T) {
 		t.Run(k.kind, func(t *testing.T) {
 			f, _, block := fakeProvider(t)
 			resource.UnitTest(t, resource.TestCase{
-				ProtoV6ProviderFactories: withOnly(f, func() fwresource.Resource { return unchecked{before030{k.new()}} }),
+				ProtoV6ProviderFactories: withOnly(f, func() fwresource.Resource { return unchecked{k.new().(fwresource.ResourceWithConfigure)} }),
 				Steps: []resource.TestStep{{
 					Config:      block + k.config(fmt.Sprintf("pgp_key = %q", armored(t, expired, false))),
 					ExpectError: regexp.MustCompile(`the key has expired`),
@@ -336,8 +342,82 @@ func TestPGPKeyEncryptsTheDefaultPassword(t *testing.T) {
 	}
 }
 
+// tainted fails a plan whose prior state does not hold the resource at addr, tainted.
+type tainted struct{ addr string }
+
+func (c tainted) CheckPlan(_ context.Context, req plancheck.CheckPlanRequest, resp *plancheck.CheckPlanResponse) {
+	if req.Plan.PriorState != nil && req.Plan.PriorState.Values != nil {
+		for _, r := range req.Plan.PriorState.Values.RootModule.Resources {
+			if r.Address == c.addr {
+				if !r.Tainted {
+					resp.Error = fmt.Errorf("%s is in the state but not tainted", c.addr)
+				}
+				return
+			}
+		}
+	}
+	resp.Error = fmt.Errorf("%s is not in the state", c.addr)
+}
+
+// When the encryption fails after the create succeeded, the object is kept in
+// the state, tainted, so the next apply replaces it and nothing is orphaned.
+func TestPGPKeyEncryptionFailsAfterCreate(t *testing.T) {
+	key := testPGPKey(t, nil)
+	var failed atomic.Bool // the first encryption of each subtest fails
+	encryptDefault = func(key *openpgp.Entity, text string) (string, error) {
+		if failed.CompareAndSwap(false, true) {
+			return "", errors.New("the test makes it fail")
+		}
+		return pgpEncrypt(key, text)
+	}
+	t.Cleanup(func() { encryptDefault = pgpEncrypt })
+
+	for _, k := range passwordKinds() {
+		t.Run(k.kind, func(t *testing.T) {
+			failed.Store(false)
+			f, factories, block := fakeProvider(t)
+			addr := k.addr()
+			config := block + k.config(fmt.Sprintf("pgp_key = %q", armored(t, key, false)))
+			// held checks that the fake holds one object of the kind, after creates creates.
+			held := func(creates int) error {
+				if ids := f.ids(k.kind); len(ids) != 1 {
+					return fmt.Errorf("the fake holds %d objects, want 1", len(ids))
+				}
+				if n := f.wrote(k.kind + "/create"); n != creates {
+					return fmt.Errorf("%d creates were sent, want %d", n, creates)
+				}
+				return nil
+			}
+
+			resource.UnitTest(t, resource.TestCase{
+				ProtoV6ProviderFactories: factories,
+				Steps: []resource.TestStep{
+					{Config: config, ExpectError: regexp.MustCompile(`Cannot encrypt the password the API chose`)},
+					{ // the object is in the state, tainted, and is replaced
+						PreConfig: func() {
+							if err := held(1); err != nil {
+								t.Fatal(err)
+							}
+						},
+						Config: config,
+						ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+							tainted{addr}, plancheck.ExpectResourceAction(addr, plancheck.ResourceActionReplace),
+						}},
+						Check: func(*terraform.State) error { return held(2) },
+					},
+				},
+			})
+		})
+	}
+}
+
+// addedIn030 are the attributes of passwordAttributes that version 0.3 added.
+// It is a record of that release, written out rather than derived, and does
+// not grow when passwordAttributes does.
+var addedIn030 = []string{"password_wo", "password_wo_version", "pgp_key", "encrypted_default_password", "key_fingerprint"}
+
 // before030 is one of today's resources with the schema of version 0.2.0,
-// which had none of passwordAttributes. Its Create is today's, run against
+// which had none of addedIn030. Its Create is today's, run against
 // today's schema with those attributes null, and its result narrowed to the
 // old schema: a state as version 0.2.0 wrote it.
 type before030 struct{ inner fwresource.Resource }
@@ -348,7 +428,7 @@ func (r before030) Metadata(ctx context.Context, req fwresource.MetadataRequest,
 
 func (r before030) Schema(ctx context.Context, req fwresource.SchemaRequest, resp *fwresource.SchemaResponse) {
 	r.inner.Schema(ctx, req, resp)
-	for name := range passwordAttributes("") {
+	for _, name := range addedIn030 {
 		delete(resp.Schema.Attributes, name)
 	}
 }
