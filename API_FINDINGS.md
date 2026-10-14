@@ -238,6 +238,11 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
     update sent while the site is `PENDING_UPDATE` is the `Not ready` case the client waits out.
   - The probe deleted the certificate itself, while the site still named it, and that was
     accepted. Whether deleting the site alone would have removed it is not known.
+  - **The certificate's host name is public from then on.** Let's Encrypt writes every
+    certificate to the Certificate Transparency logs, which anyone can search and which keep
+    their entries. The same holds for any real site with `generate_le`, which is expected there;
+    for a test it means the test domain's name is published. The probe says so and is not to be
+    run again without that being acceptable.
   - Not observed: a renewal. The date in the name suggests a renewed certificate is a new object
     with a new id, which would show as a changed `cert_id` on refresh and nothing more.
 - Order of `routes` and `domains`: not relied upon. The resource models both as sets.

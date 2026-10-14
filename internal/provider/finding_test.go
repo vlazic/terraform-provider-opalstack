@@ -974,6 +974,11 @@ func TestFindingAppJSONKeys(t *testing.T) {
 }
 
 // What does generate_le do for a domain that does resolve to the server?
+//
+// Running this publishes the test domain's full name for good: every Let's
+// Encrypt certificate is written to the public Certificate Transparency logs,
+// and an entry is never removed. It ran once, on 2026-10-13. Do not run it
+// again unless the base domain may be public.
 func TestFindingLetsEncrypt(t *testing.T) {
 	p := newProbe(t)
 	sandbox, err := p.c.OSUsers().Read(p.ctx, p.osuser)
