@@ -43,6 +43,11 @@ resource "opalstack_mariauser" "blog" {
 }
 ```
 
+Opalstack also generates a password of its own when the object is created, and reports it once.
+With `password_wo` and no `pgp_key` (section 2) that one is not kept either, so `default_password`
+stays null; add `pgp_key` to keep an encrypted copy of it. An empty `password_wo`, for example
+from a secret store that answered nothing, is refused at plan time.
+
 `password_wo` conflicts with `password`. To move an existing object from one to the other, replace
 `password` with the two new attributes; the next apply sends the write-only password once. Taking
 both attributes out of the configuration changes nothing: the object keeps its password.

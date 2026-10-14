@@ -149,7 +149,8 @@ func TestPasswordWriteOnly(t *testing.T) {
 						ConfigStateChecks: append(firstState,
 							statecheck.ExpectKnownValue(addr, tfjsonpath.New("password_wo_version"), knownvalue.Int64Exact(1)),
 							statecheck.ExpectKnownValue(addr, tfjsonpath.New("password"), knownvalue.Null()),
-							statecheck.ExpectKnownValue(addr, tfjsonpath.New("default_password"), knownvalue.StringExact("fake-default-password")),
+							// A write-only password without pgp_key keeps the API's own out of the state too.
+							statecheck.ExpectKnownValue(addr, tfjsonpath.New("default_password"), knownvalue.Null()),
 						),
 						Check: resource.ComposeAggregateTestCheckFunc(
 							f.sent(create, []string{`"password":"` + first + `"`}, nil),
@@ -219,6 +220,8 @@ func TestPasswordValidators(t *testing.T) {
 					step(`password = "a"`+"\n  "+writeOnly("b", 1), `"password" cannot be specified when "password_wo" is specified`),
 					step(`password_wo = "b"`, `"password_wo_version" must be specified when "password_wo" is specified`),
 					step(`password_wo_version = 1`, `"password_wo" must be specified when "password_wo_version" is specified`),
+					// An empty value, such as a secret store that answered nothing, would move the version and send nothing.
+					step(writeOnly("", 1), "string length must be at least 1"),
 					step(`pgp_key = "not a key!"`, "neither an ASCII-armored key nor base64"),
 					step(fmt.Sprintf("pgp_key = %q", armored(t, key, true)), "is a private key"),
 				},

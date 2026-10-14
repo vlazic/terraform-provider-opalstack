@@ -58,8 +58,9 @@ test object unless rule 2 says so.
 - An attribute added to an existing resource is Optional and Computed with `UseStateForUnknown`,
   and an update sends it only when the plan changes it: a configuration that does not name it must
   plan nothing and send nothing. `TestMailUserUpgradeFrom012` is the pattern for testing that.
-  The exception is a write-only secret such as `opalstack_osuser.password`: Optional only, never
-  read back, and removing it from the configuration changes nothing.
+  The exception is a password the API never returns, such as `password` and the write-only
+  `password_wo`: Optional only, never read back, and removing it from the configuration changes
+  nothing.
 - Secrets are `Sensitive: true`.
 - Test names are `tfacc-` plus six random lowercase alphanumerics. Sweepers match the prefix
   strictly and skip anything ambiguous.

@@ -1,15 +1,19 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.0 (2026-10-14)
 
 - `opalstack_osuser`, `opalstack_mariauser`, `opalstack_psqluser` and `opalstack_mailuser`:
   `password_wo` and `password_wo_version`, a write-only password that is sent to the API and never
   kept in the plan or the state. It is sent on create and again only when `password_wo_version`
-  changes. Needs Terraform or OpenTofu 1.11 or newer; `password` stays and works as before.
+  changes. Needs Terraform or OpenTofu 1.11 or newer; `password` stays and works as before. With
+  `password_wo` and no `pgp_key`, the password the API generates on create is not kept either. An
+  empty `password_wo` is refused at plan time.
 - The same four: `pgp_key`, a public OpenPGP key. The password the API chooses on create is then
   kept only encrypted to that key, in `encrypted_default_password`, with `key_fingerprint`, and
   `default_password` stays null. A key that is private, expired, revoked or cannot encrypt is
   refused before anything is created.
+- No token resource: the API refuses to create tokens and to set their permissions, so tokens
+  are made in the Opalstack control panel.
 - New guide "Managing secrets": write-only passwords, `pgp_key`, protecting the state, and feeding
   a password from a secret store.
 - A configuration and a state written by 0.2.0 plan no change after the upgrade: every new

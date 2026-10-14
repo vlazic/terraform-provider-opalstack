@@ -249,11 +249,14 @@ func passwordAttributes(what string) map[string]schema.Attribute {
 		"password_wo": schema.StringAttribute{
 			MarkdownDescription: "Password of the " + what + ", write-only: sent to the API and never kept in the plan " +
 				"or the state. It is sent on create, and afterwards only when `password_wo_version` changes. " +
-				"Needs Terraform or OpenTofu 1.11 or newer. Conflicts with `password`.",
+				"Needs Terraform or OpenTofu 1.11 or newer. Conflicts with `password`. Without `pgp_key`, the " +
+				"password the API generates on create is then not kept either.",
 			Optional:  true,
 			Sensitive: true,
 			WriteOnly: true,
 			Validators: []validator.String{
+				// An empty one would be "send nothing" while the version moves on.
+				stringvalidator.LengthAtLeast(1),
 				stringvalidator.ConflictsWith(path.MatchRoot("password")),
 				stringvalidator.AlsoRequires(path.MatchRoot("password_wo_version")),
 			},
@@ -319,11 +322,14 @@ func (m *passwordModel) pgpKey(diags *diag.Diagnostics) *openpgp.Entity {
 }
 
 // keepDefault keeps the password the API reported on create: in the clear, or
-// encrypted to key when there is one.
+// encrypted to key when there is one. With password_wo and no key it is not
+// kept at all: whoever chose a write-only password asked for no password in
+// the state, and the API's own may still be a working second one.
 func (m *passwordModel) keepDefault(password string, key *openpgp.Entity, diags *diag.Diagnostics) {
 	m.DefaultPassword, m.EncryptedDefaultPassword, m.KeyFingerprint = types.StringNull(), types.StringNull(), types.StringNull()
 	switch {
 	case password == "":
+	case key == nil && !m.PasswordWOVersion.IsNull():
 	case key == nil:
 		m.DefaultPassword = types.StringValue(password)
 	default:

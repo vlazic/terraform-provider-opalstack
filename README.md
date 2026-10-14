@@ -3,7 +3,7 @@
 A Terraform and OpenTofu provider for [Opalstack](https://www.opalstack.com) managed hosting, built
 on terraform-plugin-framework. Opalstack is unrelated to Opal (opal.dev).
 
-**Status: early. Version 0.2 is released, 0.3 is in progress (see [`CHANGELOG.md`](CHANGELOG.md)).**
+**Status: early. Version 0.3 is released (see [`CHANGELOG.md`](CHANGELOG.md)).**
 It is a personal project, not an Opalstack product. Thirteen resources and fourteen data sources
 exist and are documented in [`docs/`](docs/index.md). Every resource passes acceptance tests
 against a real account, last run on 2026-10-14. The eight data sources added in version 0.2 are

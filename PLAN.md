@@ -63,8 +63,9 @@ Written to be read with no other context. Facts about the API are in
   `opalstack_mariauser`, `opalstack_psqluser` and `opalstack_mailuser`; the guide "Managing
   secrets". `make test` covers each of them against the fake API, including a state written with
   the 0.2.0 schema (`TestPasswordUpgradeFrom020`). The extended `TestAccOSUser`, `TestAccMaria`,
-  `TestAccPsql` and `TestAccMail` have not run against the real account yet.
-- Phase 2, tokens as a resource, waits on a probe the owner runs.
+  `TestAccPsql` and `TestAccMail` passed against the real account on 2026-10-14.
+- Phase 2, tokens as a resource, is dropped: the API refuses to create tokens and to set their
+  permissions (`API_FINDINGS.md`, token and tokenacl).
 
 ## Decisions that differ from the first design notes
 
@@ -138,8 +139,6 @@ Written to be read with no other context. Facts about the API are in
 
 ## Next
 
-1. Run the extended acceptance tests for 0.3 (write switches of osuser, mariauser, psqluser,
-   mailuser, domain and address), then sweep and switch off.
-2. The token probe, then the decision on phase 2.
-3. The open items at the end of `API_FINDINGS.md`.
-4. Not planned: quarantined mail, notices.
+1. Release 0.3.0.
+2. The open items at the end of `API_FINDINGS.md`.
+3. Not planned: tokens (the API cannot create them), quarantined mail, notices.
