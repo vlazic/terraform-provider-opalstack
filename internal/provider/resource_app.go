@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"maps"
+	"reflect"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -104,8 +106,12 @@ func (r *appResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp
 			"json": schema.StringAttribute{
 				CustomType: jsontypes.NormalizedType{},
 				MarkdownDescription: "Per-type settings as a JSON object, for example `jsonencode({ php_version = 83 })`. " +
-					"Only the keys given here are managed: the API adds settings of its own, and those are left alone " +
-					"and not shown. The `opalstack_app` data source shows all of them.",
+					"Only the keys given here are managed: the API adds settings of its own, and settings can be made " +
+					"in the control panel; those are kept and not shown. Removing a key, or this attribute, only stops " +
+					"managing it: the app keeps its value. To turn a setting off, set it (`external_port_access = false`) " +
+					"or change it in the control panel. One exception: a change from a symlink type (`SLS`, `SLP`, `SLN`) " +
+					"to another type drops `sym_link_path`, which no other type takes. The `opalstack_app` data source " +
+					"shows all of them.",
 				Optional:      true,
 				Validators:    []validator.String{jsonObject{}},
 				PlanModifiers: []planmodifier.String{sameJSON{}},
@@ -258,9 +264,12 @@ func (r *appResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 }
 
 func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var m appModel
+	var m, prior appModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &m)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &prior)...)
 	settings, diags := m.settings()
+	resp.Diagnostics.Append(diags...)
+	before, diags := prior.settings()
 	resp.Diagnostics.Append(diags...)
 	ctx, cancel := withTimeout(ctx, m.Timeouts.Update, &resp.Diagnostics)
 	defer cancel()
@@ -269,6 +278,30 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	}
 
 	apps := r.client.Apps()
+	// The API replaces the whole json on an update, so the app's settings are
+	// read and sent back with the configured keys over them. A key the
+	// configuration stops naming is not removed, only no longer managed: the
+	// server would put its own default back (php_version 73), which is a quiet
+	// downgrade. Leaving a symlink type drops sym_link_path, which no other type
+	// takes. Otherwise json is left out of the request, and the app keeps it all:
+	// json is sent only when a configured key is new or has a new value.
+	leavesSymlink := symlinkType(prior.Type.ValueString()) && !symlinkType(m.Type.ValueString())
+	if leavesSymlink || changesSettings(before, settings) {
+		current, err := apps.Read(ctx, m.ID.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Cannot read the app's settings", err.Error())
+			return
+		}
+		merged := map[string]any{}
+		maps.Copy(merged, current.JSON)
+		if leavesSymlink {
+			delete(merged, "sym_link_path")
+		}
+		maps.Copy(merged, settings)
+		settings = merged
+	} else {
+		settings = nil
+	}
 	if _, err := apps.Update(ctx, client.AppUpdate{ID: m.ID.ValueString(), Type: m.Type.ValueString(), JSON: settings}); err != nil {
 		resp.Diagnostics.AddError("Cannot update the app", err.Error())
 		return
@@ -280,6 +313,22 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	}
 	m.set(ready)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
+}
+
+// changesSettings tells whether the configuration sets a key the state did not
+// have, or to another value. A key it only stops naming is no change.
+func changesSettings(before, after map[string]any) bool {
+	for key, value := range after {
+		if old, had := before[key]; !had || !reflect.DeepEqual(old, value) {
+			return true
+		}
+	}
+	return false
+}
+
+// symlinkType tells the app types that need sym_link_path.
+func symlinkType(appType string) bool {
+	return appType == "SLS" || appType == "SLP" || appType == "SLN"
 }
 
 func (r *appResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {

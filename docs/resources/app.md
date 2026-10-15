@@ -38,7 +38,7 @@ resource "opalstack_app" "blog" {
 ### Optional
 
 - `installer_url` (String) URL of an installer script to run when the app is created. Changing it replaces the app. Leaving it out keeps whatever the app was created with, so an imported app is not replaced.
-- `json` (String) Per-type settings as a JSON object, for example `jsonencode({ php_version = 83 })`. Only the keys given here are managed: the API adds settings of its own, and those are left alone and not shown. The `opalstack_app` data source shows all of them.
+- `json` (String) Per-type settings as a JSON object, for example `jsonencode({ php_version = 83 })`. Only the keys given here are managed: the API adds settings of its own, and settings can be made in the control panel; those are kept and not shown. Removing a key, or this attribute, only stops managing it: the app keeps its value. To turn a setting off, set it (`external_port_access = false`) or change it in the control panel. One exception: a change from a symlink type (`SLS`, `SLP`, `SLN`) to another type drops `sym_link_path`, which no other type takes. The `opalstack_app` data source shows all of them.
 - `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 
 ### Read-Only

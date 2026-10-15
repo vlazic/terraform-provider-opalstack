@@ -179,14 +179,15 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
   - `php_version` must be an integer, one of 56, 73, 74, 80, 81, 82, 83, 84, 85 on the server
     tested. A string, even `"83"`, answers 400 `'83' is not of type 'integer'`.
   - `external_port_access: true` was accepted on an `APA` app, so the schema is not strictly per
-    type. An update with `{}` changed nothing: `php_version` stayed.
+    type. An update with `{}` left `php_version` at 73; that is the server's default coming back
+    after `{}` emptied `json` (see "An update replaces the whole `json`" below).
 - **One schema serves every app type** (`TestFindingAppJSONKeys`, 2026-10-13). An update naming
   thirty candidate keys got the same answer from all nine types. Known to the schema: `php_version`,
   `fpm_type`, `fpm_max_children`, `fpm_start_servers`, `fpm_min_spare_servers`,
   `fpm_max_spare_servers`, `fpm_max_requests`, `app_exec`, `url_fopen`, `sym_link_path`,
   `auto_site_url`, `add_https_security_headers`, `external_port_access`, `subroot`, `db_name`,
-  `db_user`, `db_host`, `app_name`. Refused as unknown: `app_email`, `app_user`, `db_type`,
-  `fpm_process_idle_timeout`, `max_execution_time`, `memory_limit`, `node_version`,
+  `db_user`, `db_host`, `app_name`, and `gzip` and `expires` (below). Refused as unknown:
+  `app_email`, `app_user`, `db_type`, `fpm_process_idle_timeout`, `max_execution_time`, `memory_limit`, `node_version`,
   `post_max_size`, `proxy_pass`, `python_version`, `ruby_version`, `upload_max_filesize`. A key
   that was not among the candidates may still exist.
   - `sym_link_path` is checked before the schema: a type other than `SLS`, `SLP`, `SLN` answers
@@ -194,8 +195,28 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
     store it with a trailing slash.
   - `SLP` and `SLN` get the `php_version` default as well.
   - **A nested value (a list holding an object) for a key answers HTTP 500** with an empty body,
-    for every type. The provider cannot send one: `json` values come from `jsonencode` of the
-    configuration, so this is reachable only through a configuration that nests.
+    for every type. The provider sends one only when the configuration nests, or when the app
+    already holds one: an update sends the app's current keys back (below). No such value has
+    been seen on a live app.
+- **`gzip` and `expires` are two more keys** (`TestFindingAppJSONCache`, 2026-10-15). Both were
+  seen on apps of the owner's account (key names counted from a GET listing, values not kept here)
+  and were not among the thirty candidates. Both are accepted on `STA`, `NPF`, `APA` and `CUS`.
+  `gzip` is a boolean. `expires` is a string, one of `max`, `epoch`, `off`, `1y`, `30d`, `1d`,
+  `5m`: `'7d' is not one of [...]`, and a number answers `3600 is not of type 'string'`. Refused
+  as unknown: `brotli`, `cache_control`, `force_https`, `hsts`, `http2`, `www_redirect`.
+- **An update replaces the whole `json`** (`TestFindingAppJSONReplace`, 2026-10-15). An `STA`
+  app created with `{"gzip": true}` and updated with `{"expires": "1d"}` reads back
+  `{"expires": "1d"}`; updated with `{}` it reads back `{}`. An `APA` app created with
+  `{"gzip": true, "php_version": 83}` and updated with `{"expires": "1d"}` reads back
+  `{"expires": "1d", "php_version": 73}`: the server's default comes back, the 83 does not. So an
+  update that sends `json` must send every key it wants kept. Leaving `json` out keeps it all:
+  `TestAccApp` changed `APA` to `CUS` without `json` and the stale `php_version` stayed
+  (2026-10-12, above). The resource reads the app first and sends its current keys back, the
+  configured ones over them. A key the configuration stops naming is kept rather than left out,
+  because the API would refill `php_version` with 73. Because every send carries the app's
+  current keys, a key the app holds but the update schema refuses (an installer's `app_user`,
+  say) would make every `json` change on that app fail with 400. UNVERIFIED whether any app holds one; none of
+  the owner's does.
 - Deleting an app removes its directory on the server (runbook).
 - `POST /app/installed/` and `/app/failed/` are callbacks for installer scripts. Not for Terraform.
 
@@ -570,7 +591,8 @@ settings per type, and `generate_le` on a domain that does not resolve.
 
 Still open:
 
-1. Which `json` keys exist beyond the eighteen found, and which app type acts on which.
+1. Which `json` keys exist beyond the twenty found, and which app type acts on which. Every key
+   the owner's apps carry is now known to the schema (checked 2026-10-15).
 3. Whether a Let's Encrypt renewal replaces the certificate object. It cannot be seen in a day.
 5. Names are unique per shell user for apps and account-wide for domains (both seen refused).
    Sites and shell users were not tried.

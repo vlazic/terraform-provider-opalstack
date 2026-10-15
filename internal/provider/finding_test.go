@@ -174,7 +174,18 @@ func (p *probe) domain() *client.Domain {
 // app makes a static app, the simplest kind, under a shell user.
 func (p *probe) app(osuser string) *client.App {
 	p.t.Helper()
-	a, err := p.c.Apps().Create(p.ctx, client.AppCreate{Name: accName(), OSUser: osuser, Type: "STA"})
+	return p.newApp(client.AppCreate{OSUser: osuser, Type: "STA"})
+}
+
+// newApp makes an app as asked, with a test name, under the sandbox shell user
+// unless the request names another.
+func (p *probe) newApp(req client.AppCreate) *client.App {
+	p.t.Helper()
+	req.Name = accName()
+	if req.OSUser == "" {
+		req.OSUser = p.osuser
+	}
+	a, err := p.c.Apps().Create(p.ctx, req)
 	p.must(err)
 	later(p, p.c.Apps(), a.ID)
 	a, err = p.c.Apps().WaitReady(p.ctx, a.ID)
@@ -983,6 +994,63 @@ func TestFindingAppJSONKeys(t *testing.T) {
 		if err == nil {
 			_, err = p.c.Apps().WaitReady(p.ctx, a.ID)
 			p.must(err)
+		}
+	}
+}
+
+// gzip and expires are on apps of the owner's account but were not among the
+// candidates above. Which types take them, and which values does expires take?
+// A few more guesses ride along with the first update of each type.
+func TestFindingAppJSONCache(t *testing.T) {
+	p := newProbe(t)
+	guesses := []string{"gzip", "expires", "brotli", "http2", "hsts", "cache_control", "force_https", "www_redirect"}
+	wrong := map[string]any{}
+	for _, key := range guesses {
+		wrong[key] = "tfacc"
+	}
+	p.find("guessed keys sent: %s", strings.Join(guesses, " "))
+	update := func(a *client.App, label string, json map[string]any) {
+		_, err := p.c.Apps().Update(p.ctx, client.AppUpdate{ID: a.ID, JSON: json})
+		if err != nil {
+			p.find("%s updated with %s: %s", a.Type, label, answer(err))
+			return
+		}
+		now, err := p.c.Apps().WaitReady(p.ctx, a.ID)
+		p.must(err)
+		p.find("%s updated with %s: accepted, json now %s", a.Type, label, settings(now.JSON))
+	}
+	for _, appType := range []string{"STA", "NPF", "APA", "CUS"} {
+		a := p.newApp(client.AppCreate{Type: appType})
+		update(a, "every guess as a word", wrong)
+		update(a, "gzip false", map[string]any{"gzip": false})
+		update(a, "expires 1d", map[string]any{"expires": "1d"})
+		if appType != "APA" {
+			continue
+		}
+		for _, value := range []any{"off", "max", "7d", "1h", "30s", "1y", "epoch", 3600} {
+			update(a, fmt.Sprintf("expires %#v", value), map[string]any{"expires": value})
+		}
+	}
+}
+
+// Does an update replace the stored json or merge into it? The second update
+// names neither key of the first, so a merge keeps both and a replace keeps
+// neither (or the server's default for php_version).
+func TestFindingAppJSONReplace(t *testing.T) {
+	p := newProbe(t)
+	for _, appType := range []string{"STA", "APA"} {
+		first := map[string]any{"gzip": true}
+		if appType == "APA" {
+			first["php_version"] = 83
+		}
+		a := p.newApp(client.AppCreate{Type: appType, JSON: first})
+		p.find("%s created with %s: json %s", appType, settings(first), settings(a.JSON))
+		for _, json := range []map[string]any{{"expires": "1d"}, {}} {
+			_, err := p.c.Apps().Update(p.ctx, client.AppUpdate{ID: a.ID, JSON: json})
+			p.must(err)
+			a, err = p.c.Apps().WaitReady(p.ctx, a.ID)
+			p.must(err)
+			p.find("%s then updated with %s: json %s", appType, settings(json), settings(a.JSON))
 		}
 	}
 }

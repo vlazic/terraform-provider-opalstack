@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- `opalstack_app`: an update no longer deletes the app's settings that the configuration does not
+  name. The API replaces the whole `json` on an update, and 0.3.0 sent the configured `json` on
+  every update of an app that has the attribute, a change of `type` or `timeouts` alone included,
+  so a setting made in the control panel (`gzip`, `expires`) was lost then. A key the
+  configuration stopped naming was dropped the same way, and the API put back its own default:
+  for `php_version` that is 73, a quiet PHP downgrade. Now `json` is sent only when a configured
+  key is new or has a new value, and the resource reads the app first and sends its settings back
+  with the configured keys over them. A key removed from `json` is no longer managed and keeps its
+  value; to turn a setting off, set it (`external_port_access = false`) or use the control panel.
+- `opalstack_app`: a change from a symlink type (`SLS`, `SLP`, `SLN`) to another type drops
+  `sym_link_path`, which no other type takes.
+
 ## 0.3.0 (2026-10-14)
 
 - `opalstack_osuser`, `opalstack_mariauser`, `opalstack_psqluser` and `opalstack_mailuser`:
