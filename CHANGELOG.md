@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1 (2026-10-15)
 
 - `opalstack_app`: an update no longer deletes the app's settings that the configuration does not
   name. The API replaces the whole `json` on an update, and 0.3.0 sent the configured `json` on
