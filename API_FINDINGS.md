@@ -130,6 +130,13 @@ Field tables give the spec type. `*` marks a field the spec lists as required.
 - `name` is RequiresReplace. `delegated_dns_zone` is updatable in place: `/domain/update/` and the
   field both appeared between May and October 2026 (see the spec comparison below). Every earlier
   source, including this project's research notes, says a domain cannot be updated.
+- **`delegated_dns_zone` works on a name with no ancestor in the account** (`TestFindingDelegatedZone`,
+  2026-10-15, `tfacc-` names under a parent the account does not have, set by
+  `OPALSTACK_PROBE_PARENT`): set to true in place, accepted, `READY` with the value true; back to
+  false in place, the same; created with true, accepted and `READY` true. Under a name whose
+  ancestor is in the account the update is refused, 400 "Cannot add <name> as a delegated DNS zone
+  because ancestor domain <ancestor> already exists." (acceptance test, 2026-10-12), which is why
+  `TestAccDomain`, under the base domain, does not change it.
 - The three `dkim_*` fields are null on some domains (explore:`domain.list.txt`).
 - **`dkim_privkey` is a private key in every domain response.** The provider must not expose it as
   an attribute and the client's debug log must redact it. The redaction pattern `key` covers it.
@@ -355,7 +362,13 @@ The two engines have the same shape under different paths (spec; `TestFindingMar
 - For the safety prefix a variable is judged by its own name and by the shell users it names:
   those in the request and, for an update or a delete, those it has now. A global one is refused
   while the prefix is set, whether the request would make it global or it is global already, and
-  the tests never create one, so **`global = true` is unverified against the live API**.
+  the tests never create one.
+- **`global = true`, verified once** by `TestFindingOSVarGlobal`, 2026-10-15, through a client
+  without the prefix, on the owner's word: a variable created with `global: true` and no shell
+  user is accepted, goes `READY` with `global=true` and still lists no shell user; `global: false`
+  in place is accepted and takes effect; the delete is accepted. Whether a shell user's
+  environment shows it was not looked at. The probe runs only when
+  `OPALSTACK_PROBE_GLOBAL_OSVAR` is that day's date, since it reaches every shell user.
 
 ### cert
 
@@ -559,7 +572,5 @@ Still open:
 
 1. Which `json` keys exist beyond the eighteen found, and which app type acts on which.
 3. Whether a Let's Encrypt renewal replaces the certificate object. It cannot be seen in a day.
-4. `delegated_dns_zone` set in place: refused for every name that has an ancestor domain in the
-   account, which every test domain has.
 5. Names are unique per shell user for apps and account-wide for domains (both seen refused).
    Sites and shell users were not tried.

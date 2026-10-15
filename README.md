@@ -7,7 +7,8 @@ on terraform-plugin-framework. Opalstack is unrelated to Opal (opal.dev).
 It is a personal project, not an Opalstack product. Thirteen resources and fourteen data sources
 exist and are documented in [`docs/`](docs/index.md). Every resource passes acceptance tests
 against a real account, last run on 2026-10-14. The eight data sources added in version 0.2 are
-tested offline against a fake API, and `global = true` on an `opalstack_osvar` is unverified.
+tested offline against a fake API. `global = true` on an `opalstack_osvar` was verified once by a
+probe (2026-10-15); the acceptance tests never make a global variable.
 [`PLAN.md`](PLAN.md) says what is decided and what comes next.
 
 ```hcl

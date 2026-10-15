@@ -43,8 +43,8 @@ Written to be read with no other context. Facts about the API are in
   `opalstack_mariadb`, `opalstack_psqluser`, `opalstack_psqldb`, `opalstack_mailuser` and
   `opalstack_address`.
 - A thirteenth resource, `opalstack_osvar`, after `TestFindingOSVar`. It is imported by UUID or
-  by name; a name that several variables carry is refused. `global = true` is unverified against
-  the live API, because the safety prefix refuses it.
+  by name; a name that several variables carry is refused. `global = true` is refused by the safety
+  prefix, so the tests never make one; `TestFindingOSVarGlobal` verified it once, 2026-10-15.
 - `opalstack_mailuser` manages `procmailrc` and the four `autoresponder_*` fields, after
   `TestFindingMailFilter`. Each is Optional and Computed and is sent only when the plan changes
   it, so a configuration that names none of them plans nothing: `TestMailUserUpgradeFrom012`

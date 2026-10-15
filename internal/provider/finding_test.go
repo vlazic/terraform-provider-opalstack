@@ -27,6 +27,9 @@ import (
 //
 // They write through the client with the safety prefix set, to objects named
 // like every other test object, so the sweeper covers what they leave behind.
+// Two do not, and each deletes what it made by name instead:
+// TestFindingOSVarGlobal (no prefix, and a name the sweeper does not match) and
+// TestFindingDelegatedZone (domains outside the base domain).
 
 type probe struct {
 	t      *testing.T
@@ -1061,5 +1064,139 @@ func TestFindingLetsEncrypt(t *testing.T) {
 		_, readErr := p.c.Certs().Read(p.ctx, certID)
 		p.find("after turning it off: generate_le=%v the site still names a cert=%v, the certificate object: %s",
 			now.GenerateLE, now.Cert != nil, answer(readErr))
+	}
+}
+
+// byName deletes, when the test ends, every object of a kind that carries a
+// name this test made, whether or not its create answered: a POST that timed
+// out may still have been carried out. For the probes whose objects the
+// sweeper cannot see.
+func byName[T any](p *probe, k interface {
+	deleter
+	List(context.Context) ([]T, error)
+}, ident func(T) (id, name string), name string) {
+	p.t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+		defer cancel()
+		all, err := k.List(ctx)
+		if err != nil {
+			p.t.Errorf("cleanup by name: %s", p.mask.Replace(err.Error()))
+			return
+		}
+		for _, o := range all {
+			id, n := ident(o)
+			if n != name {
+				continue
+			}
+			err := k.Delete(ctx, id)
+			if err == nil {
+				err = k.WaitDeleted(ctx, id)
+			}
+			if err != nil && !errors.Is(err, client.ErrNotFound) {
+				p.t.Errorf("cleanup by name: %s", p.mask.Replace(err.Error()))
+			}
+		}
+	})
+}
+
+// What does a global variable look like? A global variable reaches every shell
+// user of the account, so the safety prefix refuses it, and this probe is the
+// one place that makes one: through a client without the prefix, used only on
+// the variable its own create returned. Its name is a shell identifier, since
+// it lands in real users' environments, so it breaks the tfacc- convention and
+// the sweeper cannot see it: byName deletes it. It is global from the create to
+// the in-place change that ends it, then deleted. It runs only when
+// OPALSTACK_PROBE_GLOBAL_OSVAR is today's date, so an opt-in left in an
+// environment does not run it again. The shell users a global variable lists
+// are counted on no line: that would be the size of the account.
+func TestFindingOSVarGlobal(t *testing.T) {
+	if os.Getenv("OPALSTACK_PROBE_GLOBAL_OSVAR") != time.Now().Format(time.DateOnly) {
+		t.Skip("reaches every shell user of the account: set OPALSTACK_PROBE_GLOBAL_OSVAR to today's date")
+	}
+	p := newProbe(t)
+	open, err := client.New(client.Config{Token: accEnv(t, tokenEnvVar)})
+	p.must(err)
+	vars := open.OSVars()
+	describe := func(id string) string {
+		v, err := vars.Read(p.ctx, id)
+		if err != nil {
+			return answer(err)
+		}
+		return fmt.Sprintf("state=%s ready=%t content=%q lists shell users=%t global=%t", v.State, v.Ready, v.Content, len(v.OSUsers) > 0, v.Global)
+	}
+
+	yes, no := true, false
+	name := strings.ReplaceAll(accName(), "-", "_") + "_probe"
+	byName(p, vars, func(v client.OSVar) (string, string) { return v.ID, v.Name }, name)
+	v, err := vars.Create(p.ctx, client.OSVarCreate{Name: name, Content: "x", OSUsers: []string{}, Global: &yes})
+	p.find("a global variable with no shell user: %s", answer(err))
+	p.must(err)
+	_, err = vars.WaitReady(p.ctx, v.ID)
+	p.find("waiting for it to be ready: %s; then %s", answer(err), describe(v.ID))
+	_, err = vars.Update(p.ctx, client.OSVarUpdate{ID: v.ID, Global: &no})
+	p.find("global turned off in place: %s", answer(err))
+	if err == nil {
+		_, err = vars.WaitReady(p.ctx, v.ID)
+		p.find("then: %s; %s", answer(err), describe(v.ID))
+	}
+	p.must(vars.Delete(p.ctx, v.ID))
+	p.find("variable deleted: %s", answer(vars.WaitDeleted(p.ctx, v.ID)))
+}
+
+// Can delegated_dns_zone be set, and changed in place, on a name with no
+// ancestor in the account? Every name under the base domain has one, so the
+// probe needs a parent the account does not have: OPALSTACK_PROBE_PARENT, a
+// domain the owner holds elsewhere. Only tfacc- names under it are made, and no
+// site, so no certificate is issued for them. The sweeper looks under the base
+// domain only, so byName deletes them.
+func TestFindingDelegatedZone(t *testing.T) {
+	parent := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(os.Getenv("OPALSTACK_PROBE_PARENT"))), ".")
+	if parent == "" {
+		t.Skip("needs a parent domain the account does not have: set OPALSTACK_PROBE_PARENT")
+	}
+	p := newProbe(t)
+	p.hide(parent, "<parent>")
+	domains := p.c.Domains()
+	describe := func(id string) string {
+		d, err := domains.Read(p.ctx, id)
+		if err != nil {
+			return answer(err)
+		}
+		return fmt.Sprintf("state=%s ready=%t delegated_dns_zone=%t is_valid_hostname=%t", d.State, d.Ready, d.DelegatedDNSZone, d.IsValidHostname)
+	}
+	all, err := domains.List(p.ctx)
+	p.must(err)
+	for _, d := range all {
+		if n := strings.ToLower(d.Name); n == parent || strings.HasSuffix(parent, "."+n) {
+			t.Fatal("the account has the parent or an ancestor of it; choose another parent")
+		}
+	}
+	create := func(delegated *bool) (*client.Domain, error) {
+		name := accName() + "." + parent
+		byName(p, domains, func(d client.Domain) (string, string) { return d.ID, d.Name }, name)
+		return domains.Create(p.ctx, client.DomainCreate{Name: name, DelegatedDNSZone: delegated})
+	}
+
+	yes, no := true, false
+	d, err := create(nil)
+	p.find("a domain with no ancestor in the account: %s", answer(err))
+	p.must(err)
+	_, err = domains.WaitReady(p.ctx, d.ID)
+	p.must(err)
+	p.find("after the create: %s", describe(d.ID))
+	for _, to := range []*bool{&yes, &no} {
+		_, err = domains.Update(p.ctx, client.DomainUpdate{ID: d.ID, DelegatedDNSZone: to})
+		p.find("delegated_dns_zone set to %t in place: %s", *to, answer(err))
+		if err == nil {
+			_, err = domains.WaitReady(p.ctx, d.ID)
+			p.find("then: %s; %s", answer(err), describe(d.ID))
+		}
+	}
+
+	born, err := create(&yes)
+	p.find("a domain created delegated: %s", answer(err))
+	if err == nil {
+		_, err = domains.WaitReady(p.ctx, born.ID)
+		p.find("then: %s; %s", answer(err), describe(born.ID))
 	}
 }
